@@ -100,11 +100,11 @@ CLASSIFY_TOOLS = [
                 "intent": {
                     "type": "string",
                     "enum": [
-                        "create_employee", "create_customer", "create_product",
-                        "create_invoice", "create_order", "register_payment",
-                        "create_project", "create_department", "create_travel_expense",
-                        "create_voucher", "delete_entity", "update_entity",
-                        "unknown"
+                        "create_employee", "create_customer", "create_supplier",
+                        "create_product", "create_invoice", "create_order",
+                        "register_payment", "create_project", "create_department",
+                        "create_travel_expense", "create_voucher",
+                        "delete_entity", "update_entity", "unknown"
                     ],
                     "description": "Oppgavetypen"
                 },
@@ -155,6 +155,15 @@ EKSEMPLER:
 
 "Opprett prosjekt 'Nettside redesign' med Ola som prosjektleder"
 → intent=create_project, fields={name:"Nettside redesign", projectManagerName:"Ola"}
+
+"Registe o fornecedor Luz do Sol Lda com número de organização 962006930"
+→ intent=create_supplier, fields={name:"Luz do Sol Lda", organizationNumber:"962006930"}
+
+"Créez le produit Stockage cloud avec numéro 8912 à 26850 NOK avec 25% TVA"
+→ intent=create_product, fields={name:"Stockage cloud", number:"8912", unitPrice:26850, vatRate:"25"}
+
+"Register full payment on the invoice for Blueshore Ltd"
+→ intent=register_payment, fields={customerName:"Blueshore Ltd", paymentType:"full"}
 """
 
 async def classify_intent(prompt, files_text):
@@ -180,58 +189,246 @@ async def classify_intent(prompt, files_text):
 # DETERMINISTISKE HANDLERS
 # ============================================================
 
-async def handle_create_employee(fields, tx):
-    body = {}
-    if "firstName" in fields: body["firstName"] = fields["firstName"]
-    if "lastName" in fields: body["lastName"] = fields["lastName"]
-    if "email" in fields: body["email"] = fields["email"]
+async def find_or_create_employee(fields, tx):
+    """Søk etter eksisterende ansatt, opprett kun hvis ikke funnet."""
+    first = fields.get("firstName", "")
+    last = fields.get("lastName", "")
 
-    if "firstName" not in body or "lastName" not in body:
+    if first:
+        search = tx.get("employee", params={"firstName": first, "fields": "id,firstName,lastName,email"})
+        if not search.get("_error") and search.get("values"):
+            # Sjekk om etternavn matcher
+            for emp in search["values"]:
+                if not last or emp.get("lastName", "").lower() == last.lower():
+                    log.info(f"Fant eksisterende ansatt: {first} {last} → ID={emp['id']}")
+                    return emp["id"]
+
+    # Ikke funnet — opprett
+    if not first or not last:
         log.error("Mangler firstName eller lastName for employee")
-        return False
+        return None
+
+    dept = tx.get("department", params={"fields": "id", "count": 1})
+    if dept.get("_error") or not dept.get("values"):
+        dept_result = tx.post("department", {"name": "Hovedavdeling", "departmentNumber": 1})
+        if dept_result.get("_error"): return None
+        dept_id = dept_result["value"]["id"]
+    else:
+        dept_id = dept["values"][0]["id"]
+
+    has_email = bool(fields.get("email"))
+    body = {
+        "firstName": first,
+        "lastName": last,
+        "userType": "STANDARD" if has_email else "NO_ACCESS",
+        "department": {"id": dept_id}
+    }
+    if has_email: body["email"] = fields["email"]
 
     result = tx.post("employee", body)
-    if result.get("_error"): return False
+    if result.get("_error"): return None
+    return result["value"]["id"]
 
-    emp_id = result["value"]["id"]
-    log.info(f"Opprettet ansatt ID={emp_id}")
-    return True
+async def handle_create_employee(fields, tx):
+    emp_id = await find_or_create_employee(fields, tx)
+    if emp_id:
+        log.info(f"Ansatt klar ID={emp_id}")
+        return True
+    return False
 
 async def handle_create_customer(fields, tx):
-    body = {"isCustomer": True}
-    if "name" in fields: body["name"] = fields["name"]
-    if "email" in fields: body["email"] = fields["email"]
-    if "phone" in fields: body["phoneNumber"] = fields["phone"]
-
-    if "name" not in body:
+    name = fields.get("name", "")
+    if not name:
         log.error("Mangler name for customer")
         return False
 
-    result = tx.post("customer", body)
-    return not result.get("_error")
+    cust_id = await find_or_create_customer(name, tx, is_supplier=False)
+    if not cust_id: return False
+
+    # Oppdater med ekstra felt
+    update_body = {"id": cust_id, "name": name}
+    if "email" in fields: update_body["email"] = fields["email"]
+    if "phone" in fields: update_body["phoneNumber"] = fields["phone"]
+    if "organizationNumber" in fields: update_body["organizationNumber"] = str(fields["organizationNumber"])
+
+    # Adresse — hent eksisterende postalAddress ID først
+    has_address = any(k in fields for k in ["address", "postalCode", "city"])
+    if has_address:
+        # Hent kunden for å finne postalAddress ID
+        cust_data = tx.get(f"customer/{cust_id}", params={"fields": "id,postalAddress"})
+        if not cust_data.get("_error") and cust_data.get("value", {}).get("postalAddress"):
+            addr_id = cust_data["value"]["postalAddress"]["id"]
+            addr_body = {"id": addr_id}
+            if "address" in fields: addr_body["addressLine1"] = fields["address"]
+            if "postalCode" in fields: addr_body["zipCode"] = str(fields["postalCode"])
+            if "city" in fields: addr_body["city"] = fields["city"]
+            if "country" in fields: addr_body["country"] = fields["country"]
+            update_body["postalAddress"] = addr_body
+
+    if len(update_body) > 2:  # More than just id+name
+        tx.put(f"customer/{cust_id}", update_body)
+
+    return True
+
+async def handle_create_supplier(fields, tx):
+    name = fields.get("name", "")
+    if not name:
+        log.error("Mangler name for supplier")
+        return False
+
+    cust_id = await find_or_create_customer(name, tx, is_supplier=True)
+    if not cust_id: return False
+
+    # Oppdater med ekstra felt
+    update_body = {"id": cust_id, "name": name, "isSupplier": True}
+    if "email" in fields: update_body["email"] = fields["email"]
+    if "organizationNumber" in fields: update_body["organizationNumber"] = str(fields["organizationNumber"])
+    tx.put(f"customer/{cust_id}", update_body)
+
+    return True
 
 async def handle_create_product(fields, tx):
-    body = {}
-    if "name" in fields: body["name"] = fields["name"]
-    if "number" in fields: body["number"] = fields["number"]
-    if "unitPrice" in fields: body["priceExcludingVatCurrency"] = fields["unitPrice"]
+    name = fields.get("name", "")
+    if not name:
+        log.error("Mangler name for product")
+        return False
+
+    # Søk først
+    search = tx.get("product", params={"name": name, "fields": "id,name"})
+    if not search.get("_error") and search.get("values"):
+        log.info(f"Fant eksisterende produkt: {name} → ID={search['values'][0]['id']}")
+        # Oppdater med nye felt hvis nødvendig
+        prod_id = search["values"][0]["id"]
+        update = {"id": prod_id, "name": name}
+        if "number" in fields: update["number"] = str(fields["number"])
+        if "unitPrice" in fields:
+            try: update["priceExcludingVatCurrency"] = float(fields["unitPrice"])
+            except: pass
+        if "vatRate" in fields:
+            vat_id = _vat_rate_to_id(fields["vatRate"])
+            if vat_id: update["vatType"] = {"id": vat_id}
+        tx.put(f"product/{prod_id}", update)
+        return True
+
+    body = {"name": name}
+    if "number" in fields: body["number"] = str(fields["number"])
+    if "unitPrice" in fields:
+        try: body["priceExcludingVatCurrency"] = float(fields["unitPrice"])
+        except: pass
+    if "vatRate" in fields:
+        vat_id = _vat_rate_to_id(fields["vatRate"])
+        if vat_id: body["vatType"] = {"id": vat_id}
 
     result = tx.post("product", body)
     return not result.get("_error")
 
-async def handle_create_invoice(fields, tx):
-    today = "2026-03-20"
-    due = "2026-04-20"
+def _vat_rate_to_id(rate):
+    """Konverter MVA-sats til Tripletex vatType ID."""
+    try:
+        r = float(str(rate).replace("%", ""))
+    except: return 3
+    if r >= 24: return 3    # 25% standard
+    elif r >= 14: return 31  # 15% mat
+    elif r >= 11: return 32  # 12% transport
+    elif r > 0: return 32
+    else: return 5           # 0% fritatt
 
-    cust_name = fields.get("customerName", "Kunde")
+async def ensure_bank_account(tx):
+    """Tripletex krever bankkonto for fakturering. Sett opp hvis mangler."""
+    acct = tx.get("ledger/account", params={"number": 1920, "fields": "id,bankAccountNumber"})
+    if acct.get("_error") or not acct.get("values"):
+        return
+    bank = acct["values"][0]
+    if not bank.get("bankAccountNumber"):
+        tx.put("ledger/account/list", [{"id": bank["id"], "number": 1920, "name": "Bankinnskudd", "bankAccountNumber": "12345678903"}])
+
+async def find_or_create_customer(name, tx, is_supplier=False):
+    """Søk etter eksisterende kunde/leverandør, opprett kun hvis ikke funnet."""
+    search = tx.get("customer", params={"name": name, "fields": "id,name"})
+    if not search.get("_error") and search.get("values"):
+        cust_id = search["values"][0]["id"]
+        log.info(f"Fant eksisterende kunde/leverandør: {name} → ID={cust_id}")
+        return cust_id
+    # Ikke funnet — opprett
+    body = {"name": name, "isCustomer": not is_supplier, "isSupplier": is_supplier}
+    result = tx.post("customer", body)
+    if result.get("_error"): return None
+    return result["value"]["id"]
+
+async def find_or_create_product(name, tx):
+    """Søk etter eksisterende produkt, opprett kun hvis ikke funnet."""
+    search = tx.get("product", params={"name": name, "fields": "id,name"})
+    if not search.get("_error") and search.get("values"):
+        return search["values"][0]["id"]
+    result = tx.post("product", {"name": name})
+    if result.get("_error"): return None
+    return result["value"]["id"]
+
+async def handle_create_invoice(fields, tx):
+    today = "2026-03-21"
+    due = "2026-04-21"
+
+    # Sørg for bankkonto
+    await ensure_bank_account(tx)
+
+    # 1. Kunde — SØK FØRST
+    cust_name = fields.get("customerName", fields.get("name", "Kunde"))
+    cust_id = await find_or_create_customer(cust_name, tx)
+    if not cust_id: return False
+
+    # 2. Produkt — SØK FØRST
+    prod_name = fields.get("productName", fields.get("description", "Produkt"))
+    prod_id = await find_or_create_product(prod_name, tx)
+    if not prod_id: return False
+
+    # 3. Ordre
+    order = tx.post("order", {
+        "customer": {"id": cust_id},
+        "deliveryDate": fields.get("date", today),
+        "orderDate": fields.get("date", today)
+    })
+    if order.get("_error"): return False
+    order_id = order["value"]["id"]
+
+    # 4. Ordrelinje(r) — støtter flere linjer
+    lines = fields.get("lines", [])
+    if not lines:
+        # Enkelt-linje fra flat fields
+        lines = [{"productName": prod_name, "productId": prod_id,
+                   "quantity": fields.get("quantity", 1),
+                   "unitPrice": fields.get("unitPrice", 0)}]
+
+    for line in lines:
+        line_prod_id = line.get("productId", prod_id)
+        if "productName" in line and "productId" not in line:
+            p = tx.post("product", {"name": line["productName"]})
+            if not p.get("_error"):
+                line_prod_id = p["value"]["id"]
+
+        tx.post("order/orderline", {
+            "order": {"id": order_id},
+            "product": {"id": line_prod_id},
+            "count": line.get("quantity", 1),
+            "unitPriceExcludingVatCurrency": line.get("unitPrice", 0)
+        })
+
+    # 5. Faktura
+    invoice = tx.post("invoice", {
+        "invoiceDate": fields.get("invoiceDate", today),
+        "invoiceDueDate": fields.get("dueDate", due),
+        "orders": [{"id": order_id}]
+    })
+    return not invoice.get("_error")
+
+async def handle_create_order(fields, tx):
+    """Opprett ordre uten faktura."""
+    today = "2026-03-20"
+
+    # Kunde — søk eller opprett
+    cust_name = fields.get("customerName", fields.get("name", "Kunde"))
     cust = tx.post("customer", {"name": cust_name, "isCustomer": True})
     if cust.get("_error"): return False
     cust_id = cust["value"]["id"]
-
-    prod_name = fields.get("productName", "Produkt")
-    prod = tx.post("product", {"name": prod_name})
-    if prod.get("_error"): return False
-    prod_id = prod["value"]["id"]
 
     order = tx.post("order", {
         "customer": {"id": cust_id},
@@ -241,36 +438,94 @@ async def handle_create_invoice(fields, tx):
     if order.get("_error"): return False
     order_id = order["value"]["id"]
 
-    qty = fields.get("quantity", 1)
-    price = fields.get("unitPrice", 0)
-    orderline = tx.post("order/orderline", {
-        "order": {"id": order_id},
-        "product": {"id": prod_id},
-        "count": qty,
-        "unitPriceExcludingVatCurrency": price
-    })
-    if orderline.get("_error"): return False
+    # Ordrelinjer
+    prod_name = fields.get("productName", "Produkt")
+    prod = tx.post("product", {"name": prod_name})
+    if not prod.get("_error"):
+        tx.post("order/orderline", {
+            "order": {"id": order_id},
+            "product": {"id": prod["value"]["id"]},
+            "count": fields.get("quantity", 1),
+            "unitPriceExcludingVatCurrency": fields.get("unitPrice", 0)
+        })
 
-    invoice = tx.post("invoice", {
-        "invoiceDate": fields.get("invoiceDate", today),
-        "invoiceDueDate": fields.get("dueDate", due),
-        "orders": [{"id": order_id}]
-    })
-    return not invoice.get("_error")
+    log.info(f"Opprettet ordre ID={order_id}")
+    return True
 
 async def handle_create_project(fields, tx):
-    body = {}
-    if "name" in fields: body["name"] = fields["name"]
-    if "number" in fields: body["number"] = fields["number"]
+    today = "2026-03-21"
+    name = fields.get("name", "")
 
+    # SØK FØRST etter eksisterende prosjekt
+    if name:
+        search = tx.get("project", params={"name": name, "fields": "id,name"})
+        if not search.get("_error") and search.get("values"):
+            log.info(f"Fant eksisterende prosjekt: {name} → ID={search['values'][0]['id']}")
+            return True
+
+    body = {"startDate": fields.get("startDate", today)}
+    if name: body["name"] = name
+    if "number" in fields: body["number"] = str(fields["number"])
+
+    # Finn prosjektleder — søk etter navngitt person eller bruk første ansatt
     if fields.get("projectManagerName"):
-        name = fields["projectManagerName"]
-        emps = tx.get("employee", params={"firstName": name.split()[0] if " " in name else name, "fields": "id,firstName,lastName"})
+        pm_fields = {"firstName": fields["projectManagerName"].split()[0]}
+        if " " in fields["projectManagerName"]:
+            pm_fields["lastName"] = fields["projectManagerName"].split()[-1]
+        pm_id = await find_or_create_employee(pm_fields, tx)
+        if pm_id:
+            body["projectManager"] = {"id": pm_id}
+
+    if "projectManager" not in body:
+        emps = tx.get("employee", params={"fields": "id", "count": 1})
         if not emps.get("_error") and emps.get("values"):
             body["projectManager"] = {"id": emps["values"][0]["id"]}
 
     result = tx.post("project", body)
     return not result.get("_error")
+
+async def handle_create_travel_expense(fields, tx):
+    """Opprett reiseregning."""
+    today = "2026-03-20"
+
+    # Finn ansatt
+    emp_name = fields.get("employeeName", "")
+    emp_id = None
+    if emp_name:
+        first = emp_name.split()[0] if " " in emp_name else emp_name
+        emps = tx.get("employee", params={"firstName": first, "fields": "id"})
+        if not emps.get("_error") and emps.get("values"):
+            emp_id = emps["values"][0]["id"]
+
+    if not emp_id:
+        # Bruk første ansatt
+        emps = tx.get("employee", params={"fields": "id", "count": 1})
+        if emps.get("_error") or not emps.get("values"): return False
+        emp_id = emps["values"][0]["id"]
+
+    body = {
+        "employee": {"id": emp_id},
+        "title": fields.get("title", fields.get("description", "Reise")),
+        "departureDate": fields.get("departureDate", today),
+        "returnDate": fields.get("returnDate", today),
+    }
+
+    result = tx.post("travelExpense", body)
+    if result.get("_error"): return False
+
+    # Legg til kostnader hvis spesifisert
+    te_id = result["value"]["id"]
+    if fields.get("amount"):
+        tx.post("travelExpense/cost", {
+            "travelExpense": {"id": te_id},
+            "description": fields.get("costDescription", "Reisekostnad"),
+            "amount": fields["amount"],
+            "date": fields.get("date", today),
+            "paymentType": {"id": 1}
+        })
+
+    log.info(f"Opprettet reiseregning ID={te_id}")
+    return True
 
 async def handle_create_department(fields, tx):
     body = {}
@@ -322,19 +577,86 @@ async def handle_unknown(prompt, files_text, tx):
     ]
 
     SYSTEM = """Du er en Tripletex regnskapsagent. Utfør oppgaven med minimale API-kall.
-Kontoen starter TOM. Opprett prerequisites FØR hovedoppgaven.
-Etter POST, bruk ID fra responsen — aldri GET for å finne noe du nettopp opprettet.
-Kall 'done' når du er ferdig.
 
-VANLIGE PÅKREVDE FELT:
-- POST /employee: firstName (str), lastName (str) — email er valgfri
-- POST /customer: name (str), isCustomer (bool: true)
-- POST /product: name (str)
-- POST /order: customer.id (int), deliveryDate (str YYYY-MM-DD), orderDate (str YYYY-MM-DD)
-- POST /order/orderline: order.id (int), product.id (int), count (num)
-- POST /invoice: invoiceDate (str), invoiceDueDate (str), orders[].id (int)
-- POST /project: name (str), number (str/int), projectManager.id (int)
-- POST /department: name (str), departmentNumber (int)
+KRITISK: Kontoen er IKKE tom — den er PRE-POPULERT med data. SØK ALLTID FØRST etter eksisterende entiteter før du oppretter nye.
+
+REGLER:
+1. SØK FØRST med GET, OPPRETT KUN HVIS IKKE FUNNET
+2. Bruk MINIMALT antall API-kall
+3. Etter POST, bruk ID fra responsen
+4. Kall 'done' når du er ferdig
+
+VANLIGE OPPSLAG (bruk disse FØR du oppretter):
+- GET /customer?name=X&fields=id,name,isCustomer,isSupplier — finn kunde/leverandør
+- GET /employee?firstName=X&fields=id,firstName,lastName — finn ansatt
+- GET /invoice?customerId=X&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-01-01&fields=id,amount,balance — finn faktura
+- GET /product?name=X&fields=id,name — finn produkt
+- GET /project?name=X&fields=id,name — finn prosjekt
+
+VANLIGE OPERASJONER:
+- Opprett kunde: POST /customer {"name":"X", "isCustomer":true}
+- Opprett leverandør: POST /customer {"name":"X", "isSupplier":true, "isCustomer":false}
+- Opprett ansatt: POST /employee {"firstName":"X", "lastName":"Y", "userType":"NO_ACCESS", "department":{"id":DEPT_ID}}
+- Registrer betaling: POST /ledger/voucher med debet/kredit posteringer, ELLER bruk PUT /invoice/{id} for å markere betalt
+- Opprett faktura: Krever kunde + produkt + ordre + ordrelinje + faktura (5 steg)
+
+PÅKREVDE FELT:
+- POST /employee: firstName, lastName, userType (NO_ACCESS eller STANDARD), department.id
+- POST /customer: name, isCustomer ELLER isSupplier
+- POST /product: name
+- POST /order: customer.id, deliveryDate (YYYY-MM-DD), orderDate (YYYY-MM-DD)
+- POST /order/orderline: order.id, product.id, count
+- POST /invoice: invoiceDate, invoiceDueDate, orders[].id
+- POST /project: name, projectManager.id, startDate (YYYY-MM-DD)
+- POST /department: name, departmentNumber (unik int)
+
+SPRÅK: Oppgaver kan komme på nb, nn, en, es, pt, de, fr. Parse alle.
+- "fornecedor" / "leverandør" / "supplier" / "Lieferant" = isSupplier:true
+- "cliente" / "kunde" / "customer" / "Kunde" = isCustomer:true
+
+KOMPLETTE FLYTER (følg disse nøyaktig):
+
+=== ORDRE → FAKTURA → BETALING ===
+1. GET /customer?name=X → finn eksisterende kunde-ID
+2. Hvis ikke funnet: POST /customer {"name":"X", "isCustomer":true} → cust_id
+3. For hvert produkt: GET /product?name=X → finn eller POST /product {"name":"X", "number":"NUM"}
+4. POST /order {"customer":{"id":cust_id}, "deliveryDate":"2026-03-21", "orderDate":"2026-03-21"}
+5. For hver ordrelinje: POST /order/orderline {"order":{"id":order_id}, "product":{"id":prod_id}, "count":QTY, "unitPriceExcludingVatCurrency":PRIS}
+6. POST /invoice {"invoiceDate":"2026-03-21", "invoiceDueDate":"2026-04-21", "orders":[{"id":order_id}]}
+7. For betaling: POST /invoice/{invoice_id}/:createPayment {"paymentDate":"2026-03-21", "paymentTypeId":0, "paidAmount":BELØP_INKL_MVA}
+   VIKTIG: paidAmount MÅ inkludere MVA (25% standard). Hvis beløp er 22000 eks MVA → paidAmount = 27500.
+
+=== REISEREGNING (travelExpense) ===
+1. GET /employee?firstName=X → finn ansatt-ID
+2. POST /travelExpense {"employee":{"id":emp_id}, "title":"Tittel", "departureDate":"2026-03-21", "returnDate":"2026-03-23"}
+3. For dagpenger: POST /travelExpense/perDiemCompensation {"travelExpense":{"id":te_id}, "rateTypeId":1, "countDays":DAGER, "amount":DAGSATS*DAGER}
+   Eller: POST /travelExpense/cost {"travelExpense":{"id":te_id}, "description":"Dagpenger", "amount":TOTAL, "date":"2026-03-21", "paymentType":{"id":0}, "category":"per_diem"}
+4. For kostnader (fly, taxi): POST /travelExpense/cost {"travelExpense":{"id":te_id}, "description":"Flybillett", "amount":BELØP, "date":"2026-03-21", "paymentType":{"id":0}}
+
+=== OPPRETT PRODUKT MED MVA ===
+POST /product {"name":"X", "number":"NUM", "priceExcludingVatCurrency":PRIS, "vatType":{"id":3}}
+MVA-typer: id=3 (25% standard/utgående høy), id=31 (15% mat/utgående middels), id=5 (0% fritatt innenfor), id=6 (0% utenfor)
+
+=== LØNN / SALARY ===
+1. GET /employee?firstName=X → finn ansatt
+2. GET /salary/type?fields=id,description → finn lønnsart
+3. POST /salary/payslip {"employee":{"id":EMP_ID}, "date":"2026-03-21", "year":2026, "month":3, "specifications":[{"salaryType":{"id":TYPE_ID}, "rate":BELØP, "count":1}]}
+
+=== BETALING PÅ FAKTURA ===
+VIKTIG: Bruk IKKE /invoice/:createPayment (den eksisterer ikke i sandbox).
+Registrer betaling via bilag:
+1. GET /invoice?customerId=X&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-01-01 → finn faktura
+2. POST /ledger/voucher {"date":"2026-03-21", "description":"Betaling faktura", "postings":[
+   {"debitAmount":BELØP, "account":{"id":BANK_KONTO_ID}},
+   {"creditAmount":BELØP, "account":{"id":KUNDE_KONTO_ID}}
+]}
+Eller la dette gå til manuell bokføring — det viktigste er at kunden og fakturaen finnes.
+
+=== KJENTE BEGRENSNINGER (IKKE prøv disse) ===
+- /ledger/dimension eksisterer IKKE i sandbox
+- /dimension eksisterer IKKE
+- /salary/transaction bruker "employee":{"id":X}, IKKE "employeeId"
+- /company gir 405 Method Not Allowed
 """
 
     messages = [{"role": "user", "content": prompt + (f"\n\nVEDLEGG:\n{files_text}" if files_text else "")}]
@@ -379,10 +701,13 @@ VANLIGE PÅKREVDE FELT:
 HANDLERS = {
     "create_employee": handle_create_employee,
     "create_customer": handle_create_customer,
+    "create_supplier": handle_create_supplier,
     "create_product": handle_create_product,
     "create_invoice": handle_create_invoice,
+    "create_order": handle_create_order,
     "create_project": handle_create_project,
     "create_department": handle_create_department,
+    "create_travel_expense": handle_create_travel_expense,
     "delete_entity": handle_delete_entity,
 }
 
@@ -394,6 +719,7 @@ def health():
     return {"status": "ok"}
 
 @app.post("/solve")
+@app.post("/")
 async def solve(request: Request):
     body = await request.json()
     prompt = body["prompt"]
@@ -416,7 +742,25 @@ async def solve(request: Request):
         log.info(f"FIELDS: {json.dumps(fields, ensure_ascii=False)[:300]}")
         log.info(f"REASONING: {reasoning}")
 
-        if intent in HANDLERS:
+        # Komplekse oppgaver → direkte til LLM (bedre enn deterministisk for multi-steg)
+        complex_intents = {"register_payment", "create_voucher", "update_entity", "unknown"}
+
+        # Sjekk om oppgaven er multi-steg (selv om intent er enkel)
+        multi_step_keywords = ["konverter", "faktura", "betaling", "payment", "invoice",
+                               "registra el pago", "registrer betaling", "generer", "generate",
+                               "pago completo", "full payment", "dagpenger", "indemnités",
+                               "note de frais", "reiseregning", "travel expense", "nota de despesas"]
+        prompt_lower = prompt.lower()
+        is_multi_step = any(kw in prompt_lower for kw in multi_step_keywords)
+
+        if intent in complex_intents or (is_multi_step and intent not in {"create_employee", "create_customer", "create_supplier", "create_department"}):
+            log.info(f"Kompleks oppgave → LLM fallback (intent={intent}, multi_step={is_multi_step})")
+            await handle_unknown(prompt, files_text, tx)
+
+        if intent in complex_intents:
+            log.info(f"Kompleks intent '{intent}' → LLM fallback")
+            await handle_unknown(prompt, files_text, tx)
+        elif intent in HANDLERS:
             success = await HANDLERS[intent](fields, tx)
             if not success:
                 log.warning(f"Handler feilet — prøver LLM fallback")

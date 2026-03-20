@@ -1,7 +1,6 @@
 """
 NM i AI 2026 — NorgesGruppen Object Detection
-run.py — Submission entry point (sandbox-safe)
-NOTE: os, sys, subprocess, yaml are BLOCKED in sandbox. Use pathlib + json only.
+run.py for ONNX model — sandbox-safe (no os, sys, subprocess)
 """
 import argparse
 import json
@@ -16,7 +15,8 @@ def main():
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
 
-    model = YOLO(str(Path(__file__).parent / 'best.pt'))
+    # ONNX model — works with any ultralytics version
+    model = YOLO(str(Path(__file__).parent / 'best.onnx'), task='detect')
     images = sorted(Path(args.input).glob('*.jpg'))
 
     if not images:
@@ -36,7 +36,7 @@ def main():
             iou=0.45,
             imgsz=1280,
             device=0,
-            augment=True,
+            augment=False,  # TTA not supported with ONNX
             verbose=False
         )
 

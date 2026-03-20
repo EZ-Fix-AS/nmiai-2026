@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NM i AI 2026 — EZ-Fix AS Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  header h1 {
+    font-size: 1.8rem;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  header h1 span { color: #00d2ff; }
+  #countdown {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #ff6b6b;
+    letter-spacing: 1px;
+  }
+  #countdown.ok { color: #51cf66; }
+  #countdown.warn { color: #ffd43b; }
+  #countdown.danger { color: #ff6b6b; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 20px;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: #16213e;
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid #0f3460;
+    transition: transform 0.15s;
+  }
+  .card:hover { transform: translateY(-2px); }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+  }
+  .card-weight {
+    font-size: 0.85rem;
+    color: #8899aa;
+    background: #0f3460;
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+  .status {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+  }
+  .status-green { background: rgba(81, 207, 102, 0.15); color: #51cf66; }
+  .status-yellow { background: rgba(255, 212, 59, 0.15); color: #ffd43b; }
+  .status-red { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; }
+
+  .detail { margin-bottom: 10px; }
+  .detail-label {
+    font-size: 0.78rem;
+    color: #8899aa;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .detail-value { font-size: 0.92rem; line-height: 1.5; }
+  .handler-list { list-style: none; padding: 0; }
+  .handler-list li {
+    padding: 3px 0;
+    font-size: 0.88rem;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  .deploy-url {
+    display: inline-block;
+    background: #0f3460;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: #8899aa;
+    font-style: italic;
+  }
+  .deploy-url a { color: #00d2ff; text-decoration: none; }
+  .deploy-url a:hover { text-decoration: underline; }
+
+  .submissions {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #00d2ff;
+  }
+
+  .log-section {
+    background: #16213e;
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid #0f3460;
+    margin-bottom: 24px;
+  }
+  .log-section h2 {
+    font-size: 1.1rem;
+    color: #fff;
+    margin-bottom: 14px;
+  }
+  .log-entry {
+    padding: 6px 0;
+    font-size: 0.88rem;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    gap: 12px;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time {
+    color: #00d2ff;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    white-space: nowrap;
+    min-width: 50px;
+  }
+  .log-msg { color: #ccc; }
+
+  .links {
+    text-align: center;
+    padding: 16px 0;
+  }
+  .links a {
+    color: #00d2ff;
+    text-decoration: none;
+    margin: 0 16px;
+    font-size: 0.9rem;
+  }
+  .links a:hover { text-decoration: underline; }
+
+  .scoreboard {
+    background: #16213e;
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid #0f3460;
+    margin-bottom: 24px;
+  }
+  .scoreboard h2 { font-size: 1.1rem; color: #fff; margin-bottom: 14px; }
+  .scoreboard table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  .scoreboard th { text-align: left; color: #00d2ff; padding: 6px 8px; border-bottom: 2px solid #0f3460; }
+  .scoreboard td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .scoreboard .pass { color: #51cf66; font-weight: 600; }
+  .scoreboard .fail { color: #ff6b6b; font-weight: 600; }
+  .scoreboard .pending { color: #ffd43b; }
+
+  .test-result {
+    background: rgba(81, 207, 102, 0.1);
+    border-left: 3px solid #51cf66;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NM i AI 2026 — <span>EZ-Fix AS</span> Dashboard</h1>
+  <div id="countdown"></div>
+</header>
+
+<div class="cards" id="cards"></div>
+
+<div class="scoreboard">
+  <h2>Tripletex Handler Scoreboard</h2>
+  <div id="scoreboard"></div>
+</div>
+
+<div class="log-section">
+  <h2>Hendelseslogg</h2>
+  <div id="log"></div>
+</div>
+
+<div class="links" id="links"></div>
+
+<script>
+// ========== STATE — oppdater denne programmatisk ==========
+const state = {
+  deadline: "2026-03-22T15:00:00+01:00",
+
+  tasks: [
+    {
+      id: "tripletex",
+      title: "Tripletex",
+      weight: "33%",
+      status: "AKTIV",
+      statusColor: "green",
+      statusEmoji: "\uD83D\uDFE2",
+      handlers: [
+        { name: "create_employee", done: true },
+        { name: "create_customer", done: true },
+        { name: "create_product", done: true },
+        { name: "create_invoice", done: true },
+        { name: "create_project", done: true },
+        { name: "create_department", done: true },
+        { name: "create_order", done: true },
+        { name: "create_travel_expense", done: true },
+        { name: "delete_entity", done: true },
+        { name: "unknown (fallback)", done: true }
+      ],
+      lastTest: "6/6 testet deterministisk \u2014 alle 0% feilrate",
+      deployUrl: "",
+      submissions: 0
+    },
+    {
+      id: "norgesgruppen",
+      title: "NorgesGruppen",
+      weight: "33%",
+      status: "DATA OVERF\u00D8RES",
+      statusColor: "yellow",
+      statusEmoji: "\uD83D\uDFE1",
+      pipeline: [
+        { name: "inspect_data", done: false },
+        { name: "convert_coco", done: false },
+        { name: "overfit_test", done: false },
+        { name: "train_phase1", done: false },
+        { name: "train_phase2", done: false }
+      ],
+      gpu: "kit-gpu-server (RTX 4000 20GB)",
+      submissions: "0/3"
+    },
+    {
+      id: "astar",
+      title: "Astar Island",
+      weight: "33%",
+      status: "SUBMITTET",
+      statusColor: "green",
+      statusEmoji: "\uD83D\uDFE2",
+      round: 10,
+      seeds: "5/5 seeds akseptert",
+      queries: "Alle (prior-basert)",
+      bug: "temporal learning feilet \u2014 fikses til neste runde",
+      roundsSubmitted: 1
+    }
+  ],
+
+  scoreboard: [
+    { handler: "create_employee", calls: 2, errors: 0, det: true, tested: "23:22" },
+    { handler: "create_customer", calls: 1, errors: 0, det: true, tested: "23:31" },
+    { handler: "create_product", calls: 1, errors: 0, det: true, tested: "23:31" },
+    { handler: "create_invoice", calls: 6, errors: 0, det: true, tested: "23:32" },
+    { handler: "create_project", calls: 2, errors: 0, det: true, tested: "23:34" },
+    { handler: "create_department", calls: 1, errors: 0, det: true, tested: "23:33" },
+    { handler: "create_order", calls: null, errors: null, det: true, tested: null },
+    { handler: "create_travel_expense", calls: null, errors: null, det: true, tested: null },
+    { handler: "delete_entity", calls: null, errors: null, det: true, tested: null },
+    { handler: "unknown (LLM fallback)", calls: "var.", errors: "var.", det: false, tested: "23:20" },
+  ],
+
+  log: [
+    { time: "23:37", msg: "Deploy Tripletex startet (Data-API) + YOLO-trening startet (kit-gpu-server)" },
+    { time: "23:34", msg: "create_project fikset — 2 API-kall, 0 feil" },
+    { time: "23:32", msg: "create_invoice testet — full flyt med bankkonto-fix, 0% feil" },
+    { time: "23:22", msg: "create_employee fikset (department + userType), 0% feilrate" },
+    { time: "23:20", msg: "Astar Island runde 10 submittet (5/5 seeds)" },
+    { time: "23:15", msg: "NorgesGruppen data overf\u00F8ring startet til kit-gpu-server" },
+    { time: "23:00", msg: "Alle credentials verifisert (Tripletex + Astar)" },
+    { time: "22:50", msg: "Prosjekt initialisert, GitHub repo opprettet" }
+  ],
+
+  links: [
+    { label: "GitHub Repo", url: "https://github.com/EZ-Fix-AS/nmiai-2026" },
+    { label: "app.ainm.no", url: "https://app.ainm.no" },
+    { label: "Tripletex Sandbox", url: "https://api.tripletex.io" }
+  ]
+};
+
+// ========== RENDER ==========
+function render() {
+  renderCards();
+  renderScoreboard();
+  renderLog();
+  renderLinks();
+}
+
+function renderCards() {
+  const container = document.getElementById("cards");
+  container.innerHTML = state.tasks.map(t => {
+    if (t.id === "tripletex") return renderTripletex(t);
+    if (t.id === "norgesgruppen") return renderNorgesGruppen(t);
+    if (t.id === "astar") return renderAstar(t);
+    return "";
+  }).join("");
+}
+
+function renderTripletex(t) {
+  const handlers = t.handlers.map(h =>
+    `<li>${h.done ? "\u2705" : "\u23F3"} ${h.name}</li>`
+  ).join("");
+  const deployHtml = t.deployUrl
+    ? `<a href="${t.deployUrl}" target="_blank">${t.deployUrl}</a>`
+    : "<em>ikke satt</em>";
+  return `
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">${t.title}</span>
+        <span class="card-weight">${t.weight}</span>
+      </div>
+      <div class="status status-${t.statusColor}">${t.statusEmoji} ${t.status}</div>
+      <div class="detail">
+        <div class="detail-label">Handlers</div>
+        <ul class="handler-list">${handlers}</ul>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Siste test</div>
+        <div class="test-result">${t.lastTest}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Deploy URL</div>
+        <div class="deploy-url">${deployHtml}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Submissions</div>
+        <div class="submissions">${t.submissions}</div>
+      </div>
+    </div>`;
+}
+
+function renderNorgesGruppen(t) {
+  const pipeline = t.pipeline.map(p =>
+    `<li>${p.done ? "\u2705" : "\u23F3"} ${p.name}</li>`
+  ).join("");
+  return `
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">${t.title}</span>
+        <span class="card-weight">${t.weight}</span>
+      </div>
+      <div class="status status-${t.statusColor}">${t.statusEmoji} ${t.status}</div>
+      <div class="detail">
+        <div class="detail-label">Pipeline</div>
+        <ul class="handler-list">${pipeline}</ul>
+      </div>
+      <div class="detail">
+        <div class="detail-label">GPU</div>
+        <div class="detail-value">${t.gpu}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Submissions</div>
+        <div class="submissions">${t.submissions}</div>
+      </div>
+    </div>`;
+}
+
+function renderAstar(t) {
+  return `
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">${t.title}</span>
+        <span class="card-weight">${t.weight}</span>
+      </div>
+      <div class="status status-${t.statusColor}">${t.statusEmoji} ${t.status}</div>
+      <div class="detail">
+        <div class="detail-label">Runde ${t.round}</div>
+        <div class="detail-value">${t.seeds}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Queries brukt</div>
+        <div class="detail-value">${t.queries}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Kjent bug</div>
+        <div class="detail-value" style="color:#ffd43b;font-size:0.85rem">${t.bug}</div>
+      </div>
+      <div class="detail">
+        <div class="detail-label">Runder submittet</div>
+        <div class="submissions">${t.roundsSubmitted}</div>
+      </div>
+    </div>`;
+}
+
+function renderScoreboard() {
+  const container = document.getElementById("scoreboard");
+  const rows = state.scoreboard.map(s => {
+    const callsStr = s.calls !== null ? s.calls : '<span class="pending">utestet</span>';
+    const errorsStr = s.errors !== null ? (s.errors === 0 ? '<span class="pass">0</span>' : `<span class="fail">${s.errors}</span>`) : '<span class="pending">-</span>';
+    const detStr = s.det ? '<span class="pass">JA</span>' : '<span class="pending">NEI</span>';
+    const testedStr = s.tested || '<span class="pending">-</span>';
+    return `<tr><td>${s.handler}</td><td>${callsStr}</td><td>${errorsStr}</td><td>${detStr}</td><td>${testedStr}</td></tr>`;
+  }).join("");
+  container.innerHTML = `<table><thead><tr><th>Handler</th><th>API-kall</th><th>Feil</th><th>Deterministisk</th><th>Testet</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderLog() {
+  const container = document.getElementById("log");
+  container.innerHTML = state.log.map(e =>
+    `<div class="log-entry">
+      <span class="log-time">${e.time}</span>
+      <span class="log-msg">${e.msg}</span>
+    </div>`
+  ).join("");
+}
+
+function renderLinks() {
+  const container = document.getElementById("links");
+  container.innerHTML = state.links.map(l =>
+    `<a href="${l.url}" target="_blank">${l.label}</a>`
+  ).join(" | ");
+}
+
+// ========== COUNTDOWN ==========
+function updateCountdown() {
+  const now = new Date();
+  const deadline = new Date(state.deadline);
+  const diff = deadline - now;
+  const el = document.getElementById("countdown");
+
+  if (diff <= 0) {
+    el.textContent = "DEADLINE PASSERT";
+    el.className = "danger";
+    return;
+  }
+
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  const seconds = Math.floor((diff % 60000) / 1000);
+
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  parts.push(`${String(hours).padStart(2, "0")}t`);
+  parts.push(`${String(minutes).padStart(2, "0")}m`);
+  parts.push(`${String(seconds).padStart(2, "0")}s`);
+
+  el.textContent = `Deadline om ${parts.join(" ")}`;
+
+  const totalHours = diff / 3600000;
+  if (totalHours > 12) el.className = "ok";
+  else if (totalHours > 3) el.className = "warn";
+  else el.className = "danger";
+}
+
+// ========== INIT ==========
+render();
+updateCountdown();
+setInterval(updateCountdown, 1000);
+</script>
+
+</body>
+</html>
