@@ -1,0 +1,3 @@
+# For TRENING (på GPU-server)
+ultralytics==8.1.0
+# torch installeres med CUDA: pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
