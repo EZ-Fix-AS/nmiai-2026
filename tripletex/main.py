@@ -251,22 +251,21 @@ async def handle_create_customer(fields, tx):
     if "phone" in fields: update_body["phoneNumber"] = fields["phone"]
     if "organizationNumber" in fields: update_body["organizationNumber"] = str(fields["organizationNumber"])
 
-    # Adresse — hent eksisterende postalAddress ID først
+    # Oppdater kunde-felt (uten adresse)
+    if len(update_body) > 2:  # More than just id+name
+        tx.put(f"customer/{cust_id}", update_body)
+
+    # Adresse — oppdater via separat PUT på address-objektet
     has_address = any(k in fields for k in ["address", "postalCode", "city"])
     if has_address:
-        # Hent kunden for å finne postalAddress ID
         cust_data = tx.get(f"customer/{cust_id}", params={"fields": "id,postalAddress"})
         if not cust_data.get("_error") and cust_data.get("value", {}).get("postalAddress"):
             addr_id = cust_data["value"]["postalAddress"]["id"]
             addr_body = {"id": addr_id}
             if "address" in fields: addr_body["addressLine1"] = fields["address"]
-            if "postalCode" in fields: addr_body["zipCode"] = str(fields["postalCode"])
+            if "postalCode" in fields: addr_body["postalCode"] = str(fields["postalCode"])
             if "city" in fields: addr_body["city"] = fields["city"]
-            if "country" in fields: addr_body["country"] = fields["country"]
-            update_body["postalAddress"] = addr_body
-
-    if len(update_body) > 2:  # More than just id+name
-        tx.put(f"customer/{cust_id}", update_body)
+            tx.put(f"address/{addr_id}", addr_body)
 
     return True
 
@@ -642,21 +641,32 @@ MVA-typer: id=3 (25% standard/utgående høy), id=31 (15% mat/utgående middels)
 2. GET /salary/type?fields=id,description → finn lønnsart
 3. POST /salary/payslip {"employee":{"id":EMP_ID}, "date":"2026-03-21", "year":2026, "month":3, "specifications":[{"salaryType":{"id":TYPE_ID}, "rate":BELØP, "count":1}]}
 
-=== BETALING PÅ FAKTURA ===
-VIKTIG: Bruk IKKE /invoice/:createPayment (den eksisterer ikke i sandbox).
-Registrer betaling via bilag:
-1. GET /invoice?customerId=X&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-01-01 → finn faktura
-2. POST /ledger/voucher {"date":"2026-03-21", "description":"Betaling faktura", "postings":[
-   {"debitAmount":BELØP, "account":{"id":BANK_KONTO_ID}},
-   {"creditAmount":BELØP, "account":{"id":KUNDE_KONTO_ID}}
-]}
-Eller la dette gå til manuell bokføring — det viktigste er at kunden og fakturaen finnes.
+=== KREDITNOTA (credit note / avoir / Gutschrift) ===
+1. GET /customer?name=X → finn kunde
+2. GET /invoice?customerId=CUST_ID&invoiceDateFrom=2020-01-01&invoiceDateTo=2030-01-01&fields=id,amount,amountOutstanding → finn faktura
+3. PUT /invoice/{invoice_id}/:createCreditNote?date=2026-03-21
+Det er alt! Tripletex oppretter automatisk kreditnota som annulerer fakturaen.
+
+=== SEND FAKTURA ===
+Etter å ha opprettet faktura:
+PUT /invoice/{invoice_id}/:send?sendType=EMAIL
+sendType kan være: EMAIL, EHF, EFAKTURA, AVTALEGIRO, VIPPS
+
+=== OPPRETT OG SEND FAKTURA (komplett flyt) ===
+1. GET /customer?name=X → finn eller POST /customer
+2. POST /product {"name":"X"} → finn eller opprett
+3. POST /order {"customer":{"id":CUST_ID}, "deliveryDate":"2026-03-21", "orderDate":"2026-03-21"}
+4. POST /order/orderline {"order":{"id":ORDER_ID}, "product":{"id":PROD_ID}, "count":1, "unitPriceExcludingVatCurrency":PRIS}
+5. POST /invoice {"invoiceDate":"2026-03-21", "invoiceDueDate":"2026-04-21", "orders":[{"id":ORDER_ID}]}
+6. PUT /invoice/{invoice_id}/:send?sendType=EMAIL
 
 === KJENTE BEGRENSNINGER (IKKE prøv disse) ===
-- /ledger/dimension eksisterer IKKE i sandbox
-- /dimension eksisterer IKKE
+- /invoice/:createPayment EKSISTERER IKKE i sandbox
+- /ledger/dimension eksisterer IKKE
 - /salary/transaction bruker "employee":{"id":X}, IKKE "employeeId"
+- /salary/payslip gir 500-feil i sandbox
 - /company gir 405 Method Not Allowed
+- For betaling: registrer via bilag (POST /ledger/voucher) eller ignorer betalingsdelen
 """
 
     messages = [{"role": "user", "content": prompt + (f"\n\nVEDLEGG:\n{files_text}" if files_text else "")}]
@@ -745,20 +755,25 @@ async def solve(request: Request):
         # Komplekse oppgaver → direkte til LLM (bedre enn deterministisk for multi-steg)
         complex_intents = {"register_payment", "create_voucher", "update_entity", "unknown"}
 
-        # Sjekk om oppgaven er multi-steg (selv om intent er enkel)
-        multi_step_keywords = ["konverter", "faktura", "betaling", "payment", "invoice",
-                               "registra el pago", "registrer betaling", "generer", "generate",
+        # Sjekk om oppgaven er multi-steg eller multi-create
+        multi_step_keywords = ["konverter", "betaling", "payment", "pago",
+                               "registra el pago", "registrer betaling",
                                "pago completo", "full payment", "dagpenger", "indemnités",
-                               "note de frais", "reiseregning", "travel expense", "nota de despesas"]
+                               "note de frais", "reiseregning", "travel expense", "nota de despesas",
+                               "kreditnota", "avoir", "credit note", "gutschrift", "nota de crédito",
+                               "reverser", "reverse", "annuler", "stornieren",
+                               "lønnsslipp", "salário", "salary", "gehalt", "salaire",
+                               "dimensjon", "dimension"]
+
+        # Multi-create: oppgaver som ber om å opprette flere entiteter
         prompt_lower = prompt.lower()
+        multi_create_keywords = ["tre avdeling", "drei abteilung", "three department",
+                                  "tres departamento", "trois département"]
+        is_multi_create = any(kw in prompt_lower for kw in multi_create_keywords)
         is_multi_step = any(kw in prompt_lower for kw in multi_step_keywords)
 
-        if intent in complex_intents or (is_multi_step and intent not in {"create_employee", "create_customer", "create_supplier", "create_department"}):
-            log.info(f"Kompleks oppgave → LLM fallback (intent={intent}, multi_step={is_multi_step})")
-            await handle_unknown(prompt, files_text, tx)
-
-        if intent in complex_intents:
-            log.info(f"Kompleks intent '{intent}' → LLM fallback")
+        if intent in complex_intents or is_multi_create or (is_multi_step and intent not in {"create_employee", "create_customer", "create_supplier", "create_department", "create_product"}):
+            log.info(f"Kompleks oppgave → LLM fallback (intent={intent}, multi_step={is_multi_step}, multi_create={is_multi_create})")
             await handle_unknown(prompt, files_text, tx)
         elif intent in HANDLERS:
             success = await HANDLERS[intent](fields, tx)
