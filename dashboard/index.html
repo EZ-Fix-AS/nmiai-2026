@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NM i AI 2026 — EZ-Fix AS</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #0f0f1a;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+  .top-bar {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    padding: 20px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #0f3460;
+  }
+  .top-bar h1 { font-size: 1.4rem; color: #fff; }
+  .top-bar h1 span { color: #00d2ff; }
+  #countdown {
+    font-size: 1.2rem;
+    font-weight: 700;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    letter-spacing: 1px;
+  }
+  .countdown-ok { color: #51cf66; }
+  .countdown-warn { color: #ffd43b; }
+  .countdown-danger { color: #ff6b6b; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.6; } }
+
+  .overview {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    padding: 20px 32px;
+  }
+  .stat-card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px 20px;
+    border: 1px solid #0f3460;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #00d2ff;
+  }
+  .stat-value.good { color: #51cf66; }
+  .stat-value.bad { color: #ff6b6b; }
+  .stat-value.warn { color: #ffd43b; }
+  .stat-label {
+    font-size: 0.75rem;
+    color: #8899aa;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 0 32px 32px;
+  }
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid #0f3460;
+  }
+  .panel-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .dot-green { background: #51cf66; }
+  .dot-yellow { background: #ffd43b; }
+  .dot-red { background: #ff6b6b; }
+  .dot-blue { background: #00d2ff; }
+
+  .full-width { grid-column: 1 / -1; }
+
+  /* Handler stats table */
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th { text-align: left; color: #00d2ff; padding: 8px; border-bottom: 2px solid #0f3460; font-weight: 600; }
+  td { padding: 7px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; }
+  .pass { color: #51cf66; font-weight: 600; }
+  .fail { color: #ff6b6b; font-weight: 600; }
+  .neutral { color: #8899aa; }
+
+  /* Task log */
+  .task-list { max-height: 500px; overflow-y: auto; }
+  .task-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: grid;
+    grid-template-columns: 55px 110px 1fr 60px 60px;
+    gap: 8px;
+    align-items: center;
+    font-size: 0.82rem;
+  }
+  .task-item:hover { background: rgba(0,210,255,0.03); }
+  .task-time { color: #00d2ff; font-family: 'SF Mono', monospace; font-size: 0.78rem; }
+  .task-intent {
+    background: #0f3460;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .task-prompt {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #aaa;
+    font-size: 0.78rem;
+  }
+  .task-calls { text-align: center; font-family: monospace; }
+  .task-status { text-align: center; font-weight: 600; }
+
+  /* Astar rounds */
+  .round-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.85rem;
+  }
+  .round-num {
+    font-weight: 700;
+    color: #00d2ff;
+    min-width: 30px;
+    font-family: monospace;
+  }
+  .seed-dot {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+  }
+  .seed-ok { background: rgba(81,207,102,0.2); color: #51cf66; }
+  .seed-miss { background: rgba(255,107,107,0.15); color: #ff6b6b; }
+  .round-score {
+    margin-left: auto;
+    font-weight: 700;
+    font-size: 1rem;
+  }
+
+  .refresh-note {
+    text-align: center;
+    padding: 12px;
+    font-size: 0.75rem;
+    color: #556;
+  }
+
+  #last-update {
+    font-size: 0.75rem;
+    color: #556;
+    padding: 0 32px 12px;
+    text-align: right;
+  }
+  .loading { color: #556; font-style: italic; padding: 20px; text-align: center; }
+
+  @media (max-width: 768px) {
+    .overview { grid-template-columns: repeat(2, 1fr); }
+    .main-grid { grid-template-columns: 1fr; }
+    .task-item { grid-template-columns: 55px 90px 1fr; }
+    .task-item .task-calls, .task-item .task-status { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>NM i AI 2026 <span>EZ-Fix AS</span></h1>
+  <div id="countdown"></div>
+</div>
+
+<div class="overview" id="overview">
+  <div class="stat-card"><div class="stat-value warn" id="s-rank">--</div><div class="stat-label">Overall Rank</div><div class="stat-label" id="s-rank-sub" style="color:#00d2ff"></div></div>
+  <div class="stat-card"><div class="stat-value" id="s-tripletex">--</div><div class="stat-label">Tripletex</div><div class="stat-label" id="s-tx-rank" style="color:#00d2ff"></div></div>
+  <div class="stat-card"><div class="stat-value" id="s-norges">--</div><div class="stat-label">NorgesGruppen</div><div class="stat-label" id="s-ng-rank" style="color:#00d2ff"></div></div>
+  <div class="stat-card"><div class="stat-value" id="s-astar">--</div><div class="stat-label">Astar Island</div><div class="stat-label" id="s-as-rank" style="color:#00d2ff"></div></div>
+</div>
+
+<div id="last-update"></div>
+
+<div class="main-grid">
+  <!-- Tripletex Handler Stats -->
+  <div class="panel">
+    <div class="panel-title"><span class="dot dot-green"></span> Tripletex Handlers</div>
+    <div id="handler-stats"><div class="loading">Laster...</div></div>
+  </div>
+
+  <!-- Astar Island Rounds -->
+  <div class="panel">
+    <div class="panel-title"><span class="dot dot-blue"></span> Astar Island Runder</div>
+    <div id="astar-rounds"><div class="loading">Laster...</div></div>
+  </div>
+
+  <!-- NorgesGruppen -->
+  <div class="panel">
+    <div class="panel-title"><span class="dot dot-green"></span> NorgesGruppen — Objektdeteksjon</div>
+    <div id="norges-panel"><div class="loading">Laster...</div></div>
+  </div>
+
+  <!-- Live Task Feed -->
+  <div class="panel full-width">
+    <div class="panel-title"><span class="dot dot-yellow"></span> Tripletex Live Feed (siste 50 oppgaver)</div>
+    <div class="task-list" id="task-feed"><div class="loading">Laster...</div></div>
+  </div>
+</div>
+
+<div class="refresh-note">Auto-refresh hvert 30. sekund</div>
+
+<script>
+const DEADLINE = new Date("2026-03-22T15:00:00+01:00");
+
+function updateCountdown() {
+  const diff = DEADLINE - new Date();
+  const el = document.getElementById("countdown");
+  if (diff <= 0) { el.textContent = "DEADLINE PASSERT"; el.className = "countdown-danger"; return; }
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  el.textContent = `${h}t ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+  el.className = h > 12 ? "countdown-ok" : h > 3 ? "countdown-warn" : "countdown-danger";
+}
+
+function renderHandlerStats(stats) {
+  const el = document.getElementById("handler-stats");
+  const entries = Object.entries(stats).sort((a,b) => b[1].total - a[1].total);
+  if (!entries.length) { el.innerHTML = '<div class="loading">Ingen data enda</div>'; return; }
+
+  let html = '<table><thead><tr><th>Handler</th><th>Oppgaver</th><th>OK</th><th>Feil%</th><th>Snitt kall</th></tr></thead><tbody>';
+  for (const [name, s] of entries) {
+    const okPct = s.total > 0 ? Math.round(s.success / s.total * 100) : 0;
+    const errPct = s.total > 0 ? Math.round((1 - s.success / s.total) * 100) : 0;
+    const avgCalls = s.total > 0 ? (s.total_calls / s.total).toFixed(1) : '-';
+    const cls = okPct >= 80 ? 'pass' : okPct >= 50 ? 'neutral' : 'fail';
+    html += `<tr>
+      <td class="mono">${name}</td>
+      <td>${s.total}</td>
+      <td class="${cls}">${okPct}%</td>
+      <td class="${errPct > 0 ? 'fail' : 'pass'}">${errPct}%</td>
+      <td class="mono">${avgCalls}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderAstarRounds(data) {
+  const el = document.getElementById("astar-rounds");
+  if (!data.round_scores || !data.round_scores.length) {
+    el.innerHTML = '<div class="loading">Ingen runde-data</div>';
+    return;
+  }
+
+  let html = '';
+  // Active round indicator
+  if (data.active_round) {
+    html += `<div class="round-row" style="background:rgba(0,210,255,0.05);border-radius:8px;padding:8px 12px;margin-bottom:8px">
+      <span class="round-num">R${data.active_round}</span>
+      <span style="color:#00d2ff;font-weight:600">AKTIV</span>
+      <span style="margin-left:auto;color:#8899aa">Budget: ${data.budget_max - data.budget_used}/${data.budget_max} queries</span>
+    </div>`;
+  }
+
+  for (const r of data.round_scores.reverse()) {
+    const seeds = (r.seeds || []).map((s, i) => {
+      if (s !== null) return `<span class="seed-dot seed-ok" title="Seed ${i}: ${s.toFixed(1)}">${s.toFixed(0)}</span>`;
+      return `<span class="seed-dot seed-miss" title="Seed ${i}: ikke submittet">-</span>`;
+    }).join('');
+    const scoreStr = r.avg_score !== null ? r.avg_score.toFixed(1) : '-';
+    const scoreCls = r.avg_score !== null ? (r.avg_score > 20 ? 'pass' : r.avg_score > 10 ? 'neutral' : 'fail') : 'neutral';
+    html += `<div class="round-row">
+      <span class="round-num">R${r.round}</span>
+      ${seeds}
+      <span class="round-score ${scoreCls}">${scoreStr}</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+
+  // Update stat card
+  const lastScored = data.round_scores.filter(r => r.avg_score !== null);
+  if (lastScored.length) {
+    const latest = lastScored[lastScored.length - 1];
+    document.getElementById("s-astar").textContent = latest.avg_score.toFixed(1);
+  }
+}
+
+function renderTaskFeed(tasks) {
+  const el = document.getElementById("task-feed");
+  if (!tasks || !tasks.length) { el.innerHTML = '<div class="loading">Ingen oppgaver enda</div>'; return; }
+
+  let html = '';
+  for (const t of [...tasks].reverse()) {
+    const statusCls = t.status === 'ok' ? 'pass' : t.status === 'error' ? 'fail' : 'neutral';
+    const statusText = t.status === 'ok' ? 'OK' : t.status === 'error' ? 'FEIL' : '...';
+    const callsText = t.api_calls !== null ? t.api_calls : '-';
+    html += `<div class="task-item">
+      <span class="task-time">${t.time || ''}</span>
+      <span class="task-intent">${t.intent || '?'}</span>
+      <span class="task-prompt" title="${(t.prompt||'').replace(/"/g,'&quot;')}">${t.prompt || ''}</span>
+      <span class="task-calls">${callsText}</span>
+      <span class="task-status ${statusCls}">${statusText}</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderNorgesGruppen(ng) {
+  const el = document.getElementById("norges-panel");
+  if (!ng) { el.innerHTML = '<div class="loading">Ingen data</div>'; return; }
+
+  let histHtml = '';
+  if (ng.history) {
+    histHtml = '<div style="margin-top:12px"><div style="font-size:0.75rem;color:#8899aa;text-transform:uppercase;margin-bottom:6px">Submission-historikk</div>';
+    for (const h of ng.history) {
+      const cls = h.score >= 0.85 ? 'pass' : h.score >= 0.65 ? 'neutral' : 'fail';
+      histHtml += `<div class="round-row">
+        <span class="task-time">${h.time}</span>
+        <span class="mono ${cls}" style="font-weight:700;font-size:1rem">${h.score.toFixed(4)}</span>
+        <span class="neutral" style="margin-left:auto;font-size:0.78rem">${h.size}</span>
+      </div>`;
+    }
+    histHtml += '</div>';
+  }
+
+  el.innerHTML = `
+    <table>
+      <tr><td class="neutral">Best Score (mAP@0.5)</td><td class="mono pass" style="font-size:1.4rem;font-weight:800">${ng.score}</td></tr>
+      <tr><td class="neutral">Rank</td><td class="mono">${ng.rank || '-'}</td></tr>
+      <tr><td class="neutral">Submissions</td><td class="mono">${ng.submissions_scored || '-'} scored, ${ng.submissions_remaining || 0} igjen i dag</td></tr>
+      <tr><td class="neutral">Modell</td><td class="mono">${ng.model}</td></tr>
+      <tr><td class="neutral">Format</td><td class="mono">${ng.format}</td></tr>
+      <tr><td class="neutral">Kategorier</td><td class="mono">${ng.categories}</td></tr>
+    </table>
+    ${histHtml}
+  `;
+
+  document.getElementById("s-norges").textContent = ng.score;
+  document.getElementById("s-norges").className = 'stat-value good';
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/all');
+    const data = await r.json();
+
+    // Tripletex handler stats + task feed
+    const tx = data.tripletex;
+    if (tx) {
+      renderHandlerStats(tx.handler_stats || {});
+      renderTaskFeed(tx.tasks || []);
+    }
+
+    // Astar
+    if (data.astar) {
+      renderAstarRounds(data.astar);
+    }
+
+    // NorgesGruppen
+    if (data.norgesgruppen) {
+      renderNorgesGruppen(data.norgesgruppen);
+    }
+
+    // Leaderboard rankings — LIVE from API
+    const lb = data.leaderboard;
+    if (lb) {
+      // Tripletex
+      if (lb.tripletex) {
+        const txScore = lb.tripletex.score;
+        document.getElementById("s-tripletex").textContent = txScore.toFixed(1);
+        document.getElementById("s-tripletex").className = 'stat-value ' + (txScore >= 70 ? 'good' : txScore >= 40 ? 'warn' : 'bad');
+        document.getElementById("s-tx-rank").textContent = `#${lb.tripletex.rank} / ${lb.tripletex.total_teams}`;
+      }
+
+      // Astar — show weighted score and rank
+      if (lb.astar) {
+        const asScore = lb.astar.score;
+        document.getElementById("s-astar").textContent = asScore ? asScore.toFixed(1) : '--';
+        document.getElementById("s-astar").className = 'stat-value ' + (asScore > 150 ? 'good' : asScore > 80 ? 'warn' : 'bad');
+        document.getElementById("s-as-rank").textContent = `#${lb.astar.rank} / ${lb.astar.total_teams}`;
+      }
+
+      // NorgesGruppen
+      if (lb.norgesgruppen) {
+        document.getElementById("s-norges").textContent = lb.norgesgruppen.score;
+        document.getElementById("s-norges").className = 'stat-value good';
+        const ngRank = lb.norgesgruppen.rank;
+        document.getElementById("s-ng-rank").textContent = ngRank ? `#${ngRank} / ${lb.norgesgruppen.total_teams}` : '';
+      }
+
+      // Overall rank — estimated from individual ranks
+      if (lb.overall && lb.overall.rank) {
+        const r = lb.overall.rank;
+        document.getElementById("s-rank").textContent = `~#${r}`;
+        document.getElementById("s-rank").className = 'stat-value ' + (r <= 50 ? 'good' : r <= 100 ? 'warn' : 'bad');
+        // Show component scores
+        const parts = [];
+        if (lb.overall.tripletex_score) parts.push(`TX:${lb.overall.tripletex_score.toFixed(0)}`);
+        if (lb.overall.norgesgruppen_score) parts.push(`NG:${lb.overall.norgesgruppen_score}`);
+        document.getElementById("s-rank-sub").textContent = parts.join(' | ');
+      }
+    }
+
+    // Update Astar from round scores if better than leaderboard
+    if (data.astar && data.astar.round_scores) {
+      const best = data.astar.round_scores
+        .filter(r => r.avg_score !== null)
+        .reduce((max, r) => r.avg_score > max ? r.avg_score : max, 0);
+      if (best > 0) {
+        // Show best round score as subtitle
+        const asRankEl = document.getElementById("s-as-rank");
+        const current = asRankEl.textContent;
+        if (current && !current.includes('best')) {
+          asRankEl.textContent = current + ` | best R=${best.toFixed(1)}`;
+        }
+      }
+    }
+
+    // Timestamp
+    document.getElementById("last-update").textContent = `Sist oppdatert: ${new Date().toLocaleTimeString('no-NO')}`;
+  } catch (e) {
+    console.error('Refresh failed:', e);
+  }
+}
+
+// Init
+updateCountdown();
+setInterval(updateCountdown, 1000);
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

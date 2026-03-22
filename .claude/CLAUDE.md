@@ -1,77 +1,87 @@
 # NM i AI 2026 — EZ-Fix AS
 
-## Prosjektstatus (oppdatert 2026-03-21 01:30)
+## Prosjektstatus (oppdatert 2026-03-22 — KONKURRANSEN AVSLUTTET)
 
-**Rank: #213 av 320 lag | Overall: 35.3 | Deadline: Søndag 22. mars kl 15:00**
+**Sluttresultat: #133 av 401 lag | Overall: ~80 | Deadline: Sondag 22. mars kl 15:00 (passert)**
 
-### Scores
+### Sluttscores
 | Oppgave | Score | Detaljer |
 |---------|-------|----------|
-| NorgesGruppen | 70.4 | YOLO mAP50=0.758, submission.zip klar |
-| Tripletex | 26.0 | 15-16/30 oppgavetyper, best 100% (8/8) |
-| Astar Island | 9.6 | Runde 10, kun priors (0 queries brukt) |
+| NorgesGruppen | **89.5** | WBF ensemble 0.8951. 3-modell ensemble. |
+| Tripletex | **~58** | V5.5: 19 deterministiske handlers, 587 submissions, 30/30 oppgavetyper forsokt |
+| Astar Island | ~53 | #19 pa Astar-leaderboard. V6-loop med Monte Carlo + priors |
+
+### Tripletex — Sluttresultat
+- **Score:** 48.4 -> **~58.0** (V5.5 med forbedret routing)
+- **Rank pa Tripletex:** #133/401
+- **Submissions brukt:** 587 av tilgjengelige
+- **Arkitektur:** Keyword routing -> deterministisk handler -> LLM fallback (Claude Sonnet)
+
+### Tripletex — Hva fungerte (100% score)
+- **Customer:** Opprett kunde med alle felt
+- **Supplier:** Opprett leverandor
+- **Employee:** Opprett ansatt (NO_ACCESS + STANDARD med email)
+- **Product:** Opprett produkt med pris
+- **Department:** Opprett avdeling med unikt nummer
+- **Salary/Lonn:** Voucher med 5 poster (D5000, K2600, K1920, D5400, K2770)
+- **Voucher:** Generell bilagsfoering med korrekt debet/kredit
+- **Invoice:** Full flyt — ordre -> ordrelinje -> faktura -> send
+- **Travel:** Reiseregning med kostnader
+- **Depreciation:** Avskrivning (D6000, K1200)
+- **Credit note:** Kreditnota via /:createCreditNote
+- **Payment:** Registrer betaling via /:payment
+
+### Tripletex — Hva var vanskelig (0-50% score)
+- **Bank reconciliation:** Kompleks flyt, sandbox-begrensninger
+- **Project lifecycle:** Opprett + timer + fakturering i en flyt
+- **Cost analysis:** Utrekk og analyse av kostnader fra vouchers
+- **Error correction:** Finn og rett feil i eksisterende bilag
+- **Dimensjoner:** /ledger/dimension finnes ikke — matte bruke department/project
+
+### Tripletex — Viktigste laerdommer
+1. **Routing-prioritet er KRITISK** — spesifikke patterns for generelle. "Lonn" matte matche for "betaling for lonn"
+2. **Per-sandbox cache** — ALDRI cache IDs mellom requests, hver sandbox har unike IDs
+3. **GET er gratis** i scoring — kun writes (POST/PUT/DELETE) teller mot score
+4. **Action-endepunkter** tar params i URL query string, ALDRI i body
+5. **Deterministiske handlers >> LLM** for strukturerte oppgaver
+6. **vatType IDs** er sandbox-spesifikke — sla opp dynamisk
+7. **Spray-submit** er riktig strategi nar best-ever score teller
+
+### Tripletex API-kunnskap (VIKTIG for TimeGate + TEK-Flow)
+- Komplett verifisert API-referanse: `/Users/markus/Claude_Local/tripletex-api-kunnskap/`
+- Voucher, employee, invoice, timesheet, dimensjoner — alt testet mot sandbox
+- Direkte anvendbart for Tripletex-integrasjon i TimeGate og TEK-Flow
 
 ### Credentials (i .env)
 - **Tripletex sandbox:** https://kkpqfuj-amager.tripletex.dev/v2
 - **Tripletex token:** i .env
-- **Astar JWT:** i .env + astar-island/main.py (utløper snart, hent ny fra browser cookies)
+- **Astar JWT:** i .env + astar-island/main.py (utlopt)
 - **Anthropic API:** Delt med Huginn & Muninn
 - **GitHub:** https://github.com/EZ-Fix-AS/nmiai-2026 (public, MIT)
 
 ### Deployment
-- **Tripletex agent:** https://nmiai.ez-ai.no → Data-API server (95.217.15.99:8090)
+- **Tripletex agent:** https://nmiai.ez-ai.no -> Data-API server (95.217.15.99:8090)
   - systemd: `tripletex-agent.service`
   - Kode: `/opt/nmiai-tripletex/main.py`
   - Deploy: `scp tripletex/main.py root@95.217.15.99:/opt/nmiai-tripletex/ && ssh root@95.217.15.99 "systemctl restart tripletex-agent"`
-- **YOLO trening:** kit-gpu-server (136.243.6.74), ferdig
-  - Modell: `/srv/nmiai-2026/norgesgruppen/runs/detect/phase2_1280/weights/best.pt`
-  - ONNX: eksportert, 262 MB
+  - **Versjon deployet:** V5.5 med 19 handlers + forbedret flerspraklig routing
+- **YOLO modeller:** kit-gpu-server (136.243.6.74), alle ferdig trent
+  - Phase1: `/srv/nmiai-2026/norgesgruppen/runs/detect/phase1_640/weights/best.pt` (mAP50=0.735)
+  - Phase2: `/srv/nmiai-2026/norgesgruppen/runs/detect/phase2_1280/weights/best.pt` (mAP50=0.742)
+  - V3: `/srv/nmiai-2026/norgesgruppen/runs/detect/v3_strong_aug/weights/best.pt` (mAP50=0.753)
+  - Alle har FP16 ONNX (~131 MB) ved siden av .pt
 
-### Tripletex — Hva fungerer
-- **100% oppgavetyper:** Opprett kunde, leverandør, ansatt, prosjekt, avdeling, produkt
-- **Søk-først mønster:** Alle handlers søker eksisterende entiteter FØR opprettelse
-- **Kreditnota:** `PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD` — VERIFISERT
-- **Send faktura:** `PUT /invoice/{id}/:send?sendType=EMAIL` — VERIFISERT
-- **LLM fallback:** Komplekse oppgaver → Claude Sonnet med Tripletex API-docs i prompt
-
-### Tripletex — Hva feiler (FIKS DISSE)
-- **Reverser betaling:** createPayment FINNES IKKE i sandbox. Trenger annen metode.
-- **Salary/lønn:** /salary/payslip gir 500-feil i sandbox
-- **Dimensjoner:** /ledger/dimension finnes ikke
-- **Timer + prosjektfaktura:** Kompleks flyt, LLM fallback klarer ~50%
-- **Reiseregning med dagpenger:** ~25%, trenger bedre handler
-- **Multi-create (3 avdelinger):** Sendes til LLM fallback, bør forbedres
-
-### Tripletex — API-kunnskap lært fra sandbox
-- Employee krever: `userType` (STANDARD/NO_ACCESS) + `department.id`
-- STANDARD krever email, NO_ACCESS trenger det ikke
-- Project krever: `projectManager.id` + `startDate`
-- Invoice krever: bankkonto på konto 1920 (settes automatisk)
-- Adresse: oppdater via `PUT /address/{id}`, IKKE som felt på customer
-- MVA-typer: id=3 (25%), id=31 (15%), id=32 (12%), id=5 (0% innenfor), id=6 (0% utenfor)
-
-### NorgesGruppen
-- **Trening ferdig:** YOLOv8x (ultralytics 8.4.24), 2-fase progressive resizing
-- **VIKTIG:** Sandbox har ultralytics 8.1.0 — bruk ONNX-eksport (opset=17)
-- **submission_v2.zip:** `/Users/markus/PROSJEKTER/nmiai-2026/norgesgruppen/submission_v2.zip` (213 MB)
-- **run.py:** Sandbox-safe (ingen os/sys import). Bruker ONNX-modell.
-- **Scoring:** 0.7 × detection_mAP + 0.3 × classification_mAP
-- **Sandbox-begrensninger:** os, sys, subprocess, yaml BLOKKERT. Bruk pathlib + json.
-- **5 submissions igjen i dag**
+### NorgesGruppen — ENSEMBLE BREAKTHROUGH
+- **Score: 0.8951** med 2-modell WBF ensemble (phase1_640 + phase2_1280)
+- **Gjennombrudd:** Enkeltmodell plata ved 0.667, ensemble ga +0.228 (+34%)
+- **WBF-params:** conf=0.01, iou_nms=0.45, iou_wbf=0.5, weights=[1.0, 1.5, 1.5]
+- **Scoring:** 0.7 x detection_mAP + 0.3 x classification_mAP
 
 ### Astar Island
 - **Script:** astar-island/main.py (Monte Carlo + priors)
-- **Problem:** Runde 10 brukte 0 queries (budget var oppbrukt) → kun prior-basert → lav score
-- **Temporal learning bug:** `learn_from_analysis` feilet med "len() of unsized object"
-- **Neste runde:** Bruk 50 queries AKTIVT, 10 per seed
-- **Probability floor 0.01** — KRITISK for å unngå KL-divergens = ∞
+- **Probability floor 0.01** — KRITISK for a unnga KL-divergens = inf
 - **Round weight:** 1.05^round_number — sene runder er verdt mer
-- **JWT utløper:** Sjekk og forny fra browser cookies på app.ainm.no
 
 ### Viktige regler
-- **Best-ever score per oppgave teller** — dårlige forsøk skader aldri
-- **Tripletex submissions:** 180/dag (resetter midnatt UTC)
-- **NorgesGruppen:** 6 submissions/dag, max 420 MB zip
-- **Astar:** 50 queries per runde, 5 seeds
-- **GitHub repo MÅ være public FØR søndag 15:00**
+- **Best-ever score per oppgave teller** — darlige forsok skader aldri
 - **.env ALDRI committes** (i .gitignore)
