@@ -7,7 +7,7 @@
 ### Sluttscores
 | Oppgave | Score | Detaljer |
 |---------|-------|----------|
-| NorgesGruppen | **89.5** | WBF ensemble 0.8951. 3-modell ensemble. |
+| NorgesGruppen | **89.95** | WBF ensemble 0.8995. 3-modell (phase1+phase2+v3), conf=0.001 |
 | Tripletex | **~58** | V5.5: 19 deterministiske handlers, 587 submissions, 30/30 oppgavetyper forsokt |
 | Astar Island | ~53 | #19 pa Astar-leaderboard. V6-loop med Monte Carlo + priors |
 
@@ -72,10 +72,12 @@
   - Alle har FP16 ONNX (~131 MB) ved siden av .pt
 
 ### NorgesGruppen — ENSEMBLE BREAKTHROUGH
-- **Score: 0.8951** med 2-modell WBF ensemble (phase1_640 + phase2_1280)
-- **Gjennombrudd:** Enkeltmodell plata ved 0.667, ensemble ga +0.228 (+34%)
-- **WBF-params:** conf=0.01, iou_nms=0.45, iou_wbf=0.5, weights=[1.0, 1.5, 1.5]
+- **Best score: 0.8995** med 3-modell WBF ensemble (phase1_640 + phase2_1280 + v3_1280)
+- **Gjennombrudd:** Enkeltmodell plata ved 0.667 → 2-modell 0.8951 (+34%) → 3-modell 0.8995
+- **Best WBF-params:** conf=0.001, iou_nms=0.45, iou_wbf=0.5, weights=[1.0, 1.5, 1.5]
 - **Scoring:** 0.7 x detection_mAP + 0.3 x classification_mAP
+- **Parameter-tuning 22. mars:** 11 submissions totalt. Endring av iou_wbf, weights, conf_type ga <0.001 forskjell. Modellkvalitet er taket.
+- **Viktigste laerdom:** Aldri endre mange params samtidig — isoler variabler. Guide-anbefalinger er generaliseringer, test alltid mot eget datasett.
 
 ### Astar Island
 - **Script:** astar-island/main.py (Monte Carlo + priors)

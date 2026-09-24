@@ -179,7 +179,7 @@ def get_norgesgruppen_data():
         return _cache["norges"]
 
     data = {
-        "score": 0.8951,
+        "score": 0.8995,
         "normalized_score": 96.7,
         "rank": "#? / 265",
         "submissions_scored": 6,
@@ -192,7 +192,7 @@ def get_norgesgruppen_data():
         "gpu": "kit-gpu-server (RTX 4000 SFF Ada 20GB)",
         "submission_file": "submission (242.1 MB)",
         "history": [
-            {"time": "14:47", "score": 0.8951, "size": "242.1 MB"},
+            {"time": "14:47", "score": 0.8995, "size": "242.1 MB"},
             {"time": "10:54", "score": 0.6599, "size": "212.6 MB"},
             {"time": "10:48", "score": 0.6670, "size": "212.6 MB"},
             {"time": "10:42", "score": 0.6666, "size": "212.6 MB"},
