@@ -3,6 +3,7 @@ NM i AI 2026 — Live Dashboard
 Read-only. Henter data fra journalctl + Astar API.
 Deployed separat fra Tripletex-agenten.
 """
+import os
 import json, re, subprocess, time
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI
@@ -14,7 +15,7 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 ASTAR_BASE = "https://api.ainm.no/astar-island"
-ASTAR_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTJlNDQzMi0wNDY4LTRhNjAtOTY3OS1jYWIzODY4ZDdhZjYiLCJlbWFpbCI6Im1hcmt1c0Blei1maXgubm8iLCJpc19hZG1pbiI6ZmFsc2UsImV4cCI6MTc3NDY0Nzg4M30.hEeMSjseq5Kstu9D1c2TprPNXW6vxC3w1DPq4X_Jzcs"
+ASTAR_TOKEN = os.environ.get("AINM_TOKEN", "")
 ASTAR_HEADERS = {"Authorization": f"Bearer {ASTAR_TOKEN}"}
 
 # Cache for Astar data (don't spam the API)
@@ -222,7 +223,7 @@ def get_leaderboard_data():
     if _cache.get("leaderboard") and now - _cache.get("leaderboard_ts", 0) < ASTAR_CACHE_TTL:
         return _cache["leaderboard"]
 
-    AINM_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTJlNDQzMi0wNDY4LTRhNjAtOTY3OS1jYWIzODY4ZDdhZjYiLCJlbWFpbCI6Im1hcmt1c0Blei1maXgubm8iLCJpc19hZG1pbiI6ZmFsc2UsImV4cCI6MTc3NDY0Nzg4M30.hEeMSjseq5Kstu9D1c2TprPNXW6vxC3w1DPq4X_Jzcs"
+    AINM_TOKEN = os.environ.get("AINM_TOKEN", "")
     headers = {"Authorization": f"Bearer {AINM_TOKEN}"}
 
     data = {"tripletex": None, "astar": None, "norgesgruppen": None}

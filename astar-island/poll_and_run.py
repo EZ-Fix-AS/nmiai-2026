@@ -2,13 +2,14 @@
 Poll for active Astar Island round and run immediately.
 Usage: python3 poll_and_run.py
 """
+import os
 import time
 import subprocess
 import requests
 import sys
 
 BASE = "https://api.ainm.no/astar-island"
-TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTJlNDQzMi0wNDY4LTRhNjAtOTY3OS1jYWIzODY4ZDdhZjYiLCJlbWFpbCI6Im1hcmt1c0Blei1maXgubm8iLCJpc19hZG1pbiI6ZmFsc2UsImV4cCI6MTc3NDY0Nzg4M30.hEeMSjseq5Kstu9D1c2TprPNXW6vxC3w1DPq4X_Jzcs"
+TOKEN = os.environ.get("AINM_TOKEN", "")
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 last_round = 14

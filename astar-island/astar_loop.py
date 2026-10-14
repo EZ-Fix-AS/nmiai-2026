@@ -3,6 +3,7 @@ Astar Island — Unified Loop (V6)
 Auto-learn from completed rounds + entropy-based queries + auto-submit
 NM i AI 2026 — EZ-Fix AS
 """
+import os
 import time
 import json
 import logging
@@ -16,7 +17,7 @@ log = logging.getLogger("astar")
 
 # === CONFIG ===
 BASE = "https://api.ainm.no/astar-island"
-TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyOTJlNDQzMi0wNDY4LTRhNjAtOTY3OS1jYWIzODY4ZDdhZjYiLCJlbWFpbCI6Im1hcmt1c0Blei1maXgubm8iLCJpc19hZG1pbiI6ZmFsc2UsImV4cCI6MTc3NDY0Nzg4M30.hEeMSjseq5Kstu9D1c2TprPNXW6vxC3w1DPq4X_Jzcs"
+TOKEN = os.environ.get("AINM_TOKEN", "")
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 FLOOR = 0.01
 DIR = Path(__file__).parent
