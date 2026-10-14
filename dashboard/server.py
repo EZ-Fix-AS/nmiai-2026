@@ -15,7 +15,7 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 ASTAR_BASE = "https://api.ainm.no/astar-island"
-ASTAR_TOKEN = os.environ.get("AINM_TOKEN", "")
+ASTAR_TOKEN = os.environ.get("AINM_JWT_TOKEN", "")
 ASTAR_HEADERS = {"Authorization": f"Bearer {ASTAR_TOKEN}"}
 
 # Cache for Astar data (don't spam the API)
@@ -223,8 +223,7 @@ def get_leaderboard_data():
     if _cache.get("leaderboard") and now - _cache.get("leaderboard_ts", 0) < ASTAR_CACHE_TTL:
         return _cache["leaderboard"]
 
-    AINM_TOKEN = os.environ.get("AINM_TOKEN", "")
-    headers = {"Authorization": f"Bearer {AINM_TOKEN}"}
+    headers = {"Authorization": f"Bearer {ASTAR_TOKEN}"}
 
     data = {"tripletex": None, "astar": None, "norgesgruppen": None}
 

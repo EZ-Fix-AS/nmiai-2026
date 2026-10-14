@@ -17,7 +17,7 @@ log = logging.getLogger("astar")
 
 # === CONFIG ===
 BASE = "https://api.ainm.no/astar-island"
-TOKEN = os.environ.get("AINM_TOKEN", "")
+TOKEN = os.environ["AINM_JWT_TOKEN"]  # fail fast; export from .env (set -a; . .env; set +a)
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 FLOOR = 0.01
 DIST_PRIORS_FILE = Path(__file__).parent / "astar_dist_priors.json"

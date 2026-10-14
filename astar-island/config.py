@@ -6,7 +6,7 @@ BASE_URL = "https://api.ainm.no/astar-island"
 
 # Hent fra browser cookies etter innlogging på app.ainm.no
 # DevTools → Application → Cookies → access_token
-TOKEN = os.environ.get("AINM_TOKEN", "")
+TOKEN = os.environ["AINM_JWT_TOKEN"]  # fail fast; export from .env (set -a; . .env; set +a)
 
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 

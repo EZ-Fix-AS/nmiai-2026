@@ -1,6 +1,6 @@
 # ROLLBACK — remove hardcoded Astar JWT (2026-10-14)
 
-Change: 6 hardcoded JWTs in astar-island/*.py and dashboard/server.py replaced by `os.environ.get("AINM_TOKEN", "")`.
+Change: 6 hardcoded JWTs in astar-island/*.py and dashboard/server.py replaced by `os.environ["AINM_JWT_TOKEN"]` (dashboard: `.get`).
 Token was expired (exp March 2026), so no live credential was exposed.
 
 Rollback: `git revert <commit>` or `git branch -D chore/remove-hardcoded-jwt` (nothing pushed/merged).
