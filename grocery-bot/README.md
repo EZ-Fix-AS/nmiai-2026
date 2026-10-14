@@ -31,7 +31,7 @@ thing at a time — several changes at once hid both a win and a loss during dev
 
 ## Results (local, average over 40 seeds per store)
 
-| Store | Starter bot | v1.3.0 | Leaderboard #1 (14.10.2026, best-of-many) |
+| Store | Starter bot | v1.3.1 | Leaderboard #1 (14.10.2026, best-of-many) |
 |---|---|---|---|
 | Easy (1 bot) | 140 | 170 | 211 |
 | Medium (3) | 153 | 223 | 320 |

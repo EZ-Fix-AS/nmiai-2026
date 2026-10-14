@@ -48,6 +48,19 @@ class ProtocolTest(unittest.TestCase):
             for action in reply["actions"]:
                 self.assertIn(action["action"], ACTIONS)
 
+    def test_unpickable_order_type_does_not_freeze_fleet(self):
+        state = json.loads(json.dumps(STATE))
+        state["trucks"][0]["order"]["items_required"].append("caviar")  # on no shelf
+        replies = run([{"type": "hello", "protocol_version": 1}, state])
+        moves = [a for a in replies[1]["actions"] if a["action"] != "wait"]
+        self.assertTrue(moves, "bots still work on the pickable part of the order")
+
+    def test_ignores_blank_and_garbage_lines(self):
+        out = subprocess.run([sys.executable, str(BOT)], capture_output=True, text=True, timeout=30, check=True,
+                             input=json.dumps({"type": "hello", "protocol_version": 1}) + "\n\nnot json\n[1]\n"
+                             + json.dumps(STATE) + "\n")
+        self.assertEqual(len(out.stdout.splitlines()), 2)
+
     def test_survives_eof_without_game_over(self):
         replies = run([{"type": "hello", "protocol_version": 1}, STATE])
         self.assertEqual(len(replies), 2)

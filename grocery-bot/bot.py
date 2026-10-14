@@ -9,6 +9,8 @@ Each round:
 Stdout carries protocol JSON only; diagnostics go to stderr.
 """
 
+from __future__ import annotations
+
 import heapq
 import itertools
 import json
@@ -18,7 +20,7 @@ import sys
 import time
 from collections import Counter
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 CAP = 3
 ROUND_BUDGET = 0.35  # seconds of planning before remaining bots just wait
@@ -58,7 +60,9 @@ class World:
     def __init__(self, state: dict):
         self.w, self.h = state["grid"]["width"], state["grid"]["height"]
         walls = {tuple(c) for c in state["grid"]["walls"]}
-        shelf = {tuple(it["position"]): (it["id"], it["type"]) for it in state["items"]}
+        shelf: dict[tuple, list] = {}
+        for it in state["items"]:
+            shelf.setdefault(tuple(it["position"]), []).append((it["id"], it["type"]))
         blocked = walls | set(shelf)
         self.cells = [(x, y) for y in range(self.h) for x in range(self.w) if (x, y) not in blocked]
         self.idx = {c: i for i, c in enumerate(self.cells)}
@@ -77,10 +81,12 @@ class World:
         # Shelves a bot standing on cell i can pick from.
         self.adj_shelf = [[] for _ in range(n)]
         pick: dict[str, set[int]] = {}
-        for (sx, sy), (item_id, typ) in shelf.items():
+        for (sx, sy), stock in shelf.items():
             for dx, dy, _ in DIRS:
                 j = self.idx.get((sx + dx, sy + dy))
-                if j is not None:
+                if j is None:
+                    continue
+                for item_id, typ in stock:
                     self.adj_shelf[j].append((item_id, typ))
                     pick.setdefault(typ, set()).add(j)
         self.pick = pick
@@ -102,7 +108,9 @@ class World:
             self.truck_cost[k] = cost
             self.truck_dist[k] = self._dijkstra(v, cost)[0]
 
-        self.spawn = self.idx.get((self.w - 2, self.h - 2), -1)
+        starts = {tuple(b["position"]) for b in state["bots"]}
+        corner = next(iter(starts)) if len(starts) == 1 and len(state["bots"]) > 1 else (self.w - 2, self.h - 2)
+        self.spawn = self.idx.get(corner, -1)
         # Idle bots park out of the way: by default the bottom corridor, plus the stackable spawn tile.
         mode = TUNE.get("park", "bottom")
         open_rows = {y for y in range(1, self.h - 1)
@@ -495,13 +503,20 @@ def decide_actions(state: dict) -> list[dict]:
         n = truck_need(t)
         if n is not None:
             raw_need[t["id"]] = n
-    need = {t: Counter(n) for t, n in raw_need.items()}
+    # A type nobody can pick up (not on any reachable shelf) must not enter the planner.
+    need = {t: Counter({typ: k for typ, k in n.items() if typ in w.pick}) for t, n in raw_need.items()}
     eta = {t: trucks[t]["rounds_until_back"] for t in need}
     docked = {t for t in need if trucks[t]["state"] == "docked"}
 
     signature = tuple((t["id"], t["state"], t["order"] and t["order"]["id"],
                        t["order"] and len(t["order"]["items_delivered"])) for t in state["trucks"])
-    carry = assign(pos, inv, need, eta, signature)
+    try:
+        carry = assign(pos, inv, need, eta, signature)
+    except Exception as exc:  # keep moving and loading even if planning breaks
+        print(f"assign failed round {state['round']}: {exc!r}", file=sys.stderr)
+        jobs.clear()
+        deliver.clear()
+        carry = {b: Counter() for b in pos}
 
     # Idle bots: keep their spot if still free, else take the nearest free one.
     spot_of = {}
@@ -575,8 +590,8 @@ def decide_actions(state: dict) -> list[dict]:
         p = pos[b]
 
         # Load if standing at a docked truck that wants something we hold.
-        here = next((t for t in docked if p in w.load_set[t]), None)
-        if here is not None and any(raw_need[here][i] > 0 for i in inv[b]):
+        here = next((t for t in docked if p in w.load_set[t] and any(raw_need[t][i] > 0 for i in inv[b])), None)
+        if here is not None:
             actions[b] = {"bot": b, "action": "load"}
             res.add(b, [p, p, p], persist=False)
             continue
@@ -632,7 +647,13 @@ def decide_actions(state: dict) -> list[dict]:
 
 def main():
     for line in sys.stdin:
-        message = json.loads(line)
+        try:
+            message = json.loads(line)
+        except ValueError:
+            print(f"unreadable line: {line[:80]!r}", file=sys.stderr)
+            continue
+        if not isinstance(message, dict):
+            continue
         kind = message.get("type")
         if kind == "hello":
             print(json.dumps({"type": "ready", "protocol_version": 1}), flush=True)
