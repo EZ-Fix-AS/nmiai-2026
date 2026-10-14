@@ -4,6 +4,8 @@
 
 **Sluttresultat: #133 av 401 lag | Overall: ~80 | Deadline: Sondag 22. mars kl 15:00 (passert)**
 
+> Merk (2026-10-14): tallene over er fra leaderboardet ved deadline 22.03. Team Brain (`felles/projects/nm-i-ai-2027.md`, sjekket 08.09) oppgir endelig resultat **#121 av 487** (normalisert: NorgesGruppen 97.1, Astar 88.1, Tripletex 55.7, totalt 80.3). [ANTATT] at 08.09-tallene er de endelige — bekreftes av Markus.
+
 ### Sluttscores
 | Oppgave | Score | Detaljer |
 |---------|-------|----------|

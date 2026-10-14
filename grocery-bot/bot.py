@@ -18,7 +18,7 @@ import sys
 import time
 from collections import Counter
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 CAP = 3
 ROUND_BUDGET = 0.35  # seconds of planning before remaining bots just wait
@@ -38,6 +38,10 @@ TRIP_ITEM_BONUS = TUNE.get("trip_item_bonus", 2.0)  # favour fuller trips: trave
 TRIP_REPLAN = TUNE.get("trip_replan", 1)  # reconsider a trip each round until its first pickup
 MAKESPAN_REPLAN = TUNE.get("makespan_replan", 1)  # same re-planning for big fleets
 TRIP_LOOKAHEAD = TUNE.get("trip_lookahead", 8)  # best trips that get a follow-up trip evaluated
+SPARE_IN_MAKESPAN = TUNE.get("spare_mk", 0)  # spare items compete with fresh fetches
+MK_MARGIN = TUNE.get("mk_margin", 1.0)  # route estimates ignore congestion: pad them
+MK_SLACK = TUNE.get("mk_slack", 0)  # flat padding (rounds) on the same estimates
+PARK_SPREAD = TUNE.get("spread", 1)  # idle bots spread over the store instead of bunching
 SPEC_FILL = TUNE.get("spec_fill", 0)  # idle bots pre-pick this many items for orders not yet seen
 
 
@@ -99,8 +103,25 @@ class World:
             self.truck_dist[k] = self._dijkstra(v, cost)[0]
 
         self.spawn = self.idx.get((self.w - 2, self.h - 2), -1)
-        # Idle bots park in the bottom corridor or on the stackable spawn tile.
-        self.park = {i for i, (x, y) in enumerate(self.cells) if y == self.h - 2} | ({self.spawn} - {-1})
+        # Idle bots park out of the way: by default the bottom corridor, plus the stackable spawn tile.
+        mode = TUNE.get("park", "bottom")
+        open_rows = {y for y in range(1, self.h - 1)
+                     if all((x, y) in self.idx for x in range(1, self.w - 1))} - rows
+        if mode == "mid":
+            self.park = {i for i, (x, y) in enumerate(self.cells) if y in open_rows and y < self.h - 3}
+        elif mode == "open":
+            self.park = {i for i, (x, y) in enumerate(self.cells) if y in open_rows}
+        elif mode == "stay":
+            self.park = set(range(n)) - self.load_row
+        else:
+            self.park = {i for i, (x, y) in enumerate(self.cells) if y == self.h - 2}
+        self.park |= {self.spawn} - {-1}
+        # "spread": each idle bot gets its own spot, spaced along the open corridors, so some
+        # bot is always near any shelf.
+        step = TUNE.get("spread_step", 2)
+        self.spots = sorted((i for i, (x, y) in enumerate(self.cells)
+                             if y in open_rows and x % step == 1), key=lambda i: self.cells[i])
+        self.spot_dist = {i: self._dijkstra([i], self.cost)[0] for i in self.spots}
         self.park_dist = self._dijkstra(self.park, self.cost)[0]
 
     def _dijkstra(self, sources, cost):
@@ -129,6 +150,7 @@ jobs: dict[int, Counter] = {}  # bot id -> pending pickups {(truck, type): count
 deliver: dict[int, Counter] = {}  # bot id -> carried items bound to trucks {(truck, type): count}
 last_pos: dict[int, int] = {}
 last_signature = None
+parked: dict[int, int] = {}  # idle bot -> its parking spot
 stuck: dict[int, int] = {}
 DEBUG = open(f"{os.environ['GB_DEBUG']}.{os.getpid()}", "w") if os.environ.get("GB_DEBUG") else None
 
@@ -157,10 +179,15 @@ def route_cost(start: int, types: list[str], truck: int) -> int:
 
 # ---------------------------------------------------------------- assignment
 
-def allocate(pos, inv, need, eta):
-    """Match carried items to trucks (preferring the bot's own job) and trim stale pickups."""
+def allocate(pos, inv, need, eta, bind_free=True):
+    """Match carried items to trucks (preferring the bot's own job) and trim stale pickups.
+
+    With bind_free off, items not already bound to a truck stay spare: the makespan
+    assignment then decides whether delivering them beats fetching fresh ones.
+    """
     w = world
     carry = {b: Counter() for b in pos}
+    spare = {b: Counter() for b in pos}
     # Items keep the truck they were picked for, so bots do not flip between trucks.
     for b in sorted(pos, key=lambda b: (b not in deliver, b)):
         bound = Counter(deliver.get(b, ()))
@@ -170,8 +197,9 @@ def allocate(pos, inv, need, eta):
             t = next((t for (t, ty), k in bound.items() if ty == item and k > 0 and t in need
                       and need[t][item] > 0), None)
             if t is None:
-                cands = [t for t in need if need[t][item] > 0]
+                cands = [t for t in need if need[t][item] > 0] if bind_free else []
                 if not cands:
+                    spare[b][item] += 1
                     continue
                 t = min(cands, key=lambda t: (t not in mine, eta[t], w.truck_dist[t][pos[b]]))
             else:
@@ -193,10 +221,10 @@ def allocate(pos, inv, need, eta):
             jobs[b] = kept
         else:
             del jobs[b]
-    return carry
+    return carry, spare
 
 
-def assign_makespan(pos, inv, need, eta, carry):
+def assign_makespan(pos, inv, need, eta, carry, spare):
     """Give each open unit to the bot that would finish it earliest.
 
     Docked trucks spread their units over many bots (parallel fetch); trucks still
@@ -226,20 +254,38 @@ def assign_makespan(pos, inv, need, eta, carry):
                 base = route_cost(pos[b], plan[b], t) if b in owner else 0
                 for typ in set(units):
                     cost = route_cost(pos[b], plan[b] + [typ], t)
-                    key = (max(cost, eta[t]), cost - base, b)
+                    key = (max(cost * MK_MARGIN + MK_SLACK, eta[t]), cost - base, b)
                     if best is None or key < best[0]:
-                        best = (key, b, typ)
+                        best = (key, b, typ, False)
+            # A bot already holding a spare unit only has to drive it over.
+            for b in pos:
+                if owner.get(b, t) != t or not spare[b]:
+                    continue
+                if b not in owner and assigned[t] >= MAX_BOTS_PER_TRUCK:
+                    continue
+                base = route_cost(pos[b], plan[b], t) if b in owner else 0
+                for typ in set(units):
+                    if spare[b][typ] > 0:
+                        cost = route_cost(pos[b], plan[b], t)
+                        key = (max(cost * MK_MARGIN + MK_SLACK, eta[t]), cost - base, b)
+                        if best is None or key < best[0]:
+                            best = (key, b, typ, True)
             if best is None:
                 break
-            _, b, typ = best
+            _, b, typ, held = best
             if b not in owner:
                 owner[b] = t
                 assigned[t] += 1
-            plan[b].append(typ)
-            slots[b] -= 1
             units.remove(typ)
             need[t][typ] -= 1
-            jobs.setdefault(b, Counter())[(t, typ)] += 1
+            if held:
+                spare[b][typ] -= 1
+                deliver.setdefault(b, Counter())[(t, typ)] += 1
+                carry[b][t] += 1
+            else:
+                plan[b].append(typ)
+                slots[b] -= 1
+                jobs.setdefault(b, Counter())[(t, typ)] += 1
 
 
 _trip_cache: dict = {}
@@ -360,9 +406,9 @@ def assign(pos, inv, need, eta, signature):
         # when the order picture changed: re-planning every round lets bots swap trips forever.
         for b in [b for b in jobs if not deliver.get(b)]:
             del jobs[b]
-    carry = allocate(pos, inv, need, eta)
+    carry, spare = allocate(pos, inv, need, eta, bind_free=not (ASSIGN == "makespan" and SPARE_IN_MAKESPAN))
     if ASSIGN == "makespan":
-        assign_makespan(pos, inv, need, eta, carry)
+        assign_makespan(pos, inv, need, eta, carry, spare)
     else:
         assign_trips(pos, inv, need, eta, carry)
     if SPEC_FILL:
@@ -457,6 +503,28 @@ def decide_actions(state: dict) -> list[dict]:
                        t["order"] and len(t["order"]["items_delivered"])) for t in state["trucks"])
     carry = assign(pos, inv, need, eta, signature)
 
+    # Idle bots: keep their spot if still free, else take the nearest free one.
+    spot_of = {}
+    if PARK_SPREAD:
+        idle = [b for b in sorted(pos) if b not in jobs and not carry[b]]
+        taken = set()
+        for b in idle:
+            sp = parked.get(b)
+            if sp is not None and sp not in taken:
+                spot_of[b] = sp
+                taken.add(sp)
+        for b in idle:
+            if b in spot_of:
+                continue
+            free = [sp for sp in w.spots if sp not in taken]
+            if not free:
+                break
+            sp = min(free, key=lambda sp: w.spot_dist[sp][pos[b]])
+            spot_of[b] = sp
+            taken.add(sp)
+        parked.clear()
+        parked.update(spot_of)
+
     # Movement goal per bot: next pickup, a truck's load cells, or a parking spot.
     spec = {}
     for b, p in pos.items():
@@ -468,6 +536,9 @@ def decide_actions(state: dict) -> list[dict]:
         elif carry[b]:
             t = min(carry[b], key=lambda t: (t not in docked, eta[t], w.truck_dist[t][p]))
             spec[b] = (lambda c, t=t: c in w.load_set[t], lambda c, t=t: w.truck_dist[t][c], w.truck_cost[t])
+        elif b in spot_of:
+            sp = spot_of[b]
+            spec[b] = (lambda c, sp=sp: c == sp, lambda c, sp=sp: w.spot_dist[sp][c], w.cost)
         else:
             spec[b] = (lambda c: c in w.park, lambda c: w.park_dist[c], w.cost)
 
@@ -546,6 +617,7 @@ def decide_actions(state: dict) -> list[dict]:
     if DEBUG:
         DEBUG.write(json.dumps({
             "r": state["round"], "score": state["score"], "st": state["action_status"],
+            "ms": round((time.monotonic() - started) * 1000, 1),
             "trucks": [(t["id"], t["state"], t["rounds_until_back"], dict(raw_need.get(t["id"], {})))
                        for t in state["trucks"]],
             "bots": [(b, w.cells[pos[b]], inv[b], {str(k): v for k, v in carry[b].items()},
@@ -569,6 +641,9 @@ def main():
                 acts = decide_actions(message)
             except Exception as exc:  # never lose a round to a bug
                 print(f"error round {message.get('round')}: {exc!r}", file=sys.stderr)
+                # Start the plan over next round rather than repeat a broken state.
+                for memo in (jobs, deliver, parked, stuck, last_pos):
+                    memo.clear()
                 if DEBUG:
                     import traceback
                     DEBUG.write(json.dumps({"error": traceback.format_exc()}) + "\n")
