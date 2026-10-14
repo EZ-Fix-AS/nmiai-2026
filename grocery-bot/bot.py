@@ -18,33 +18,34 @@ import sys
 import time
 from collections import Counter
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 CAP = 3
-WINDOW = 16  # space-time planning horizon (rounds)
 ROUND_BUDGET = 0.35  # seconds of planning before remaining bots just wait
 INF = 10**6
 DIRS = ((0, -1, "move_up"), (0, 1, "move_down"), (-1, 0, "move_left"), (1, 0, "move_right"))
 
 TUNE = json.loads(os.environ.get("GB_TUNE", "{}"))  # local experiments only
+WINDOW = TUNE.get("window", 16)  # space-time planning horizon (rounds)
 STUCK_ROUNDS = TUNE.get("stuck_rounds", 3)
 
 # Fleet-size dependent; set by configure() on the first state.
 ASSIGN = "trip"
 MAX_BOTS_PER_TRUCK = 3
-LOAD_ROW_PENALTY = 2
+LOAD_ROW_PENALTY = 0.5
 TRIP_UNITS = TUNE.get("trip_units", 14)  # cap on open units the trip planner enumerates
 TRIP_ITEM_BONUS = TUNE.get("trip_item_bonus", 2.0)  # favour fuller trips: travel dominates
 TRIP_REPLAN = TUNE.get("trip_replan", 1)  # reconsider a trip each round until its first pickup
-TRIP_HYSTERESIS = TUNE.get("trip_hyst", 0.0)  # how much better a new trip must be to switch
 MAKESPAN_REPLAN = TUNE.get("makespan_replan", 1)  # same re-planning for big fleets
+TRIP_LOOKAHEAD = TUNE.get("trip_lookahead", 8)  # best trips that get a follow-up trip evaluated
+SPEC_FILL = TUNE.get("spec_fill", 0)  # idle bots pre-pick this many items for orders not yet seen
 
 
 def configure(n_bots: int):
     global ASSIGN, MAX_BOTS_PER_TRUCK, LOAD_ROW_PENALTY
     ASSIGN = TUNE.get("assign", "makespan" if n_bots >= 5 else "trip")
     MAX_BOTS_PER_TRUCK = TUNE.get("max_bots", 5 if n_bots >= 10 else 3)
-    LOAD_ROW_PENALTY = TUNE.get("row_penalty", 0 if n_bots == 1 else 2)
+    LOAD_ROW_PENALTY = TUNE.get("row_penalty", 0 if n_bots == 1 else 0.5)
 
 
 class World:
@@ -126,8 +127,8 @@ class World:
 world: World | None = None
 jobs: dict[int, Counter] = {}  # bot id -> pending pickups {(truck, type): count}
 deliver: dict[int, Counter] = {}  # bot id -> carried items bound to trucks {(truck, type): count}
-previous: dict[int, Counter] = {}  # trip released for re-planning this round
 last_pos: dict[int, int] = {}
+last_signature = None
 stuck: dict[int, int] = {}
 DEBUG = open(f"{os.environ['GB_DEBUG']}.{os.getpid()}", "w") if os.environ.get("GB_DEBUG") else None
 
@@ -241,11 +242,18 @@ def assign_makespan(pos, inv, need, eta, carry):
             jobs.setdefault(b, Counter())[(t, typ)] += 1
 
 
-def trip_time(start: int, units: tuple, eta: dict) -> int:
-    """Rounds to pick `units` (best order) and deliver them, the soonest truck first."""
+_trip_cache: dict = {}
+
+
+def trip_eval(start: int, units: tuple, eta: dict) -> tuple[int, int]:
+    """(rounds, end cell) to pick `units` (best order) and deliver them, the soonest truck first."""
+    trucks = tuple(sorted({t for t, _ in units}, key=lambda t: (eta[t], t)))
+    key = (start, units, tuple(eta[t] for t in trucks))
+    hit = _trip_cache.get(key)
+    if hit is not None:
+        return hit
     w = world
-    trucks = sorted({t for t, _ in units}, key=lambda t: eta[t])
-    best = INF
+    best = (INF, start)
     for perm in set(itertools.permutations(units)):
         p, rounds = start, 0
         for _, typ in perm:
@@ -254,63 +262,111 @@ def trip_time(start: int, units: tuple, eta: dict) -> int:
         for t in trucks:
             rounds = max(rounds + w.truck_dist[t][p], eta[t]) + 1
             p = min(w.load[t], key=lambda c: abs(w.cells[c][0] - w.cells[p][0]))
-        best = min(best, rounds)
+        if rounds < best[0]:
+            best = (rounds, p)
+    _trip_cache[key] = best
     return best
 
 
-def trip_score(start, combo, remaining, eta):
-    per_truck = Counter(t for t, _ in combo)
-    value = len(combo) * (1 + TRIP_ITEM_BONUS) + sum(5 for t, n in per_truck.items() if n == remaining[t])
-    rounds = trip_time(start, combo, eta)
-    return (value / max(rounds, 1), -rounds)
+def trip_options(start, need, eta, slots):
+    """Every distinct pickup set for one trip: [(rate, value, rounds, end, combo)], best first."""
+    open_units = [(t, typ) for t in sorted(need, key=lambda t: (eta[t], t)) for typ in (+need[t]).elements()]
+    open_units = open_units[:TRIP_UNITS]
+    remaining = {t: sum((+need[t]).values()) for t in need}
+    out, seen = [], set()
+    for k in range(1, min(slots, len(open_units)) + 1):
+        for combo in itertools.combinations(open_units, k):
+            if combo in seen:
+                continue
+            seen.add(combo)
+            per_truck = Counter(t for t, _ in combo)
+            value = k * (1 + TRIP_ITEM_BONUS) + sum(5 for t, n in per_truck.items() if n == remaining[t])
+            rounds, end = trip_eval(start, combo, eta)
+            out.append((value / max(rounds, 1), value, rounds, end, combo))
+    out.sort(key=lambda o: (-o[0], o[2]))
+    return out
+
+
+def lookahead_rate(option, need, eta, slots):
+    """Points per round over this trip plus the best follow-up trip."""
+    _, value, rounds, end, combo = option
+    after = {t: Counter(n) for t, n in need.items()}
+    for t, typ in combo:
+        after[t][typ] -= 1
+    after = {t: n for t, n in after.items() if +n}  # a completed truck leaves; its next order is unknown
+    if not after:
+        return value / max(rounds, 1)
+    later = {t: max(0, eta[t] - rounds) for t in after}
+    follow = trip_options(end, after, later, slots)
+    if not follow:
+        return value / max(rounds, 1)
+    _, v2, r2, _, _ = follow[0]
+    return (value + v2) / max(rounds + r2, 1)
 
 
 def assign_trips(pos, inv, need, eta, carry):
     """Small fleets: each free bot takes the pickup set with the most points per round."""
+    _trip_cache.clear()
     for b in sorted(pos):
         if b in jobs or carry[b]:
             continue
         slots = CAP - len(inv[b])
-        open_units = [(t, typ) for t in sorted(need, key=lambda t: eta[t]) for typ in (+need[t]).elements()]
-        if slots <= 0 or not open_units:
+        if slots <= 0:
             continue
-        open_units = open_units[:TRIP_UNITS]
-        remaining = {t: sum((+need[t]).values()) for t in need}
-        best, seen = None, set()
-        for k in range(1, min(slots, len(open_units)) + 1):
-            for combo in itertools.combinations(open_units, k):
-                if combo in seen:
-                    continue
-                seen.add(combo)
-                score = trip_score(pos[b], combo, remaining, eta)
-                if best is None or score > best[0]:
-                    best = (score, combo)
-        if best is None:
+        options = trip_options(pos[b], need, eta, slots)
+        if not options:
             continue
-        # Hysteresis: keep the previous trip unless the new one is clearly better.
-        prev = previous.pop(b, None)
-        if prev is not None:
-            combo = tuple(sorted(prev.elements()))
-            if all(need.get(t, Counter())[typ] >= k for (t, typ), k in prev.items()):
-                score = trip_score(pos[b], combo, remaining, eta)
-                if best[0][0] <= score[0] * (1 + TRIP_HYSTERESIS):
-                    best = (score, combo)
-        jobs[b] = Counter(best[1])
-        for t, typ in best[1]:
+        if TRIP_LOOKAHEAD:
+            options = options[:TRIP_LOOKAHEAD]
+            best = max(options, key=lambda o: (lookahead_rate(o, need, eta, slots), -o[2]))
+        else:
+            best = options[0]
+        jobs[b] = Counter(best[4])
+        for t, typ in best[4]:
             need[t][typ] -= 1
 
 
-def assign(pos, inv, need, eta):
-    previous.clear()
-    if TRIP_REPLAN and (ASSIGN == "trip" or MAKESPAN_REPLAN):
-        # Until a bot has picked something, its trip stays open to better offers.
+def assign_speculative(pos, inv, carry):
+    """Idle bots stock up on the types the fleet holds least of (orders are ~uniform)."""
+    w = world
+    held = Counter()
+    for b in pos:
+        held.update(inv[b])
+        held.update(typ for (_, typ), k in jobs.get(b, Counter()).items() for _ in range(k))
+    for b in sorted(pos):
+        if b in jobs or carry[b] or len(inv[b]) >= SPEC_FILL:
+            continue
+        p, job = pos[b], Counter()
+        for _ in range(SPEC_FILL - len(inv[b])):
+            typ = min(w.pick, key=lambda t: (held[t], w.type_dist[t][p]))
+            held[typ] += 1
+            job[(None, typ)] += 1
+            p = w.type_near[typ][p]
+        jobs[b] = job
+
+
+def assign(pos, inv, need, eta, signature):
+    global last_signature
+    changed = signature != last_signature
+    last_signature = signature
+    # Speculative pickups are re-decided every round, after the real work is handed out.
+    for b in list(jobs):
+        for key in [k for k in jobs[b] if k[0] is None]:
+            del jobs[b][key]
+        if not jobs[b]:
+            del jobs[b]
+    if changed and TRIP_REPLAN and (ASSIGN == "trip" or MAKESPAN_REPLAN):
+        # Until a bot has picked something, its trip stays open to better offers. Only
+        # when the order picture changed: re-planning every round lets bots swap trips forever.
         for b in [b for b in jobs if not deliver.get(b)]:
-            previous[b] = jobs.pop(b)
+            del jobs[b]
     carry = allocate(pos, inv, need, eta)
     if ASSIGN == "makespan":
         assign_makespan(pos, inv, need, eta, carry)
     else:
         assign_trips(pos, inv, need, eta, carry)
+    if SPEC_FILL:
+        assign_speculative(pos, inv, carry)
     return carry
 
 
@@ -397,7 +453,9 @@ def decide_actions(state: dict) -> list[dict]:
     eta = {t: trucks[t]["rounds_until_back"] for t in need}
     docked = {t for t in need if trucks[t]["state"] == "docked"}
 
-    carry = assign(pos, inv, need, eta)
+    signature = tuple((t["id"], t["state"], t["order"] and t["order"]["id"],
+                       t["order"] and len(t["order"]["items_delivered"])) for t in state["trucks"])
+    carry = assign(pos, inv, need, eta, signature)
 
     # Movement goal per bot: next pickup, a truck's load cells, or a parking spot.
     spec = {}
@@ -511,6 +569,9 @@ def main():
                 acts = decide_actions(message)
             except Exception as exc:  # never lose a round to a bug
                 print(f"error round {message.get('round')}: {exc!r}", file=sys.stderr)
+                if DEBUG:
+                    import traceback
+                    DEBUG.write(json.dumps({"error": traceback.format_exc()}) + "\n")
                 acts = []
             print(json.dumps({"round": message["round"], "actions": acts}), flush=True)
         elif kind in ("game_over", "game_end"):
